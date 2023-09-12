@@ -1,4 +1,8 @@
 import duckdb
+import pyarrow as pa
+import pyarrow.parquet as pq
+
+
 # to start an in-memory database
 con = duckdb.connect(database=':memory:')
 con.sql("SELECT count(*) FROM './pages_ada_002.parquet'").show()
@@ -19,6 +23,17 @@ query = f"SELECT *, {select_columns} FROM 'pages_ada_002.parquet'"
 # Define the path for the new Parquet file
 new_parquet_path = 'pages_ada_002_split.parquet'
 
-# Use the COPY command to write the result to the new Parquet file
-copy_command = f"COPY ({query}) TO '{new_parquet_path}' WITH (FORMAT 'PARQUET')"
-con.execute(copy_command)
+copy_command = f"{query}"
+result = con.execute(copy_command)
+
+record_batch_reader = result.fetch_record_batch()
+
+writer = pq.ParquetWriter(where=new_parquet_path, schema=record_batch_reader.schema)
+
+chunk = record_batch_reader.read_next_batch()
+total_rows: int = 0
+while len(chunk) > 0:
+    chunk = record_batch_reader.read_next_batch()
+    total_rows += chunk.num_rows
+    writer.write_batch(batch=chunk)
+    print(f"Wrote batch of {chunk.num_rows:,d} row(s) - total row(s) written thus far: {total_rows:,d}")

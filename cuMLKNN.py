@@ -12,6 +12,9 @@ import pylibraft
 import gc
 import math
 import time
+from pylibraft.neighbors.brute_force import knn
+import pylibraft
+
 
 def stream_cudf_to_parquet(df, chunk_size, filename):
     """
@@ -94,13 +97,18 @@ import rmm
 
 rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
-# batch_size = 10000
 batch_size = 543680
 max_memory_threshold = 0.1
 
 table = pq.read_table('split.parquet')
 
+#FOR TESTING take the first 10k rows
+#table = table.slice(0, 10000)
+
 tune_memory()
+
+k = 100
+split = True
 
 # before batching clean up the table
 print(f'length table: {len(table)}')
@@ -124,16 +132,19 @@ for col in columns_to_drop:
 print(f'batch_size {batch_size}')
 
 batch_count = math.ceil(len(table) / batch_size)
+assert(k <= (len(table) % batch_size))
 print(f'batch_count {batch_count}')
 
 # TODO: remove /10
 # batch_size = int(batch_size/10)
 
 for start in tqdm(range(0, batch_count)):
-    if start != batch_count:
-        batch = table.slice(start, batch_size)
-    else:
-        batch = table.slice(start, len(table) - start * batch_size)
+    batch_offset = start * batch_size
+    batch_length = batch_size if start != batch_count-1 else len(table) - batch_offset
+    batch = table.slice(batch_offset, batch_length)
+    if (start == batch_count-1):
+        print(batch_length)
+
     df = cudf.DataFrame.from_arrow(batch)
     df_numeric = df.select_dtypes(['float32', 'float64'])
 
@@ -141,13 +152,12 @@ for start in tqdm(range(0, batch_count)):
     gc.collect()
     rmm.reinitialize(pool_allocator=False)
 
-    k = 100
-    split = True
 
     # sample_df = df_numeric.sample(frac=1)
     print(f"starting fit for k ={k}")
-    nn = NearestNeighbors(n_neighbors=k, algorithm='brute')
-    nn.fit(df_numeric)
+    #nn = NearestNeighbors(n_neighbors=k, algorithm='brute')
+    #nn.fit(df_numeric)
+    dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
     print("done fit")
 
     print("df_numeric")
@@ -164,7 +174,10 @@ for start in tqdm(range(0, batch_count)):
             #print(f"i {i} of {splits}")
 
             offset = i * rows_per_split
-            length = rows_per_split if i != splits - 1 else len(table)  # To handle the last chunk
+            length = rows_per_split if i != splits - 1 else len(table) - offset  # To handle the last chunk
+
+            if (i == splits-1):
+                print(length)
             #print(f"rows_per_split {rows_per_split}")
             #print(f"offset {offset}")
             #print(f"length {length}")
@@ -184,7 +197,16 @@ for start in tqdm(range(0, batch_count)):
             #print(f"df_numeric1 Number of rows: {num_rows}")
             #print(f"df_numeric1 Number of columns: {num_columns}")
 
-            distances1, indices1 = nn.kneighbors(df_numeric1, two_pass_precision=True)
+            query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
+
+            assert(k <= len(dataset))
+            cupydistances1, cupyindices1 = knn(dataset, query, k)
+
+            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
+            # add batch_offset to indices
+            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+
+            #distances1, indices1 = nn.kneighbors(df_numeric1, two_pass_precision=True)
             distances = cudf.concat([distances, distances1], ignore_index=True)
             indices = cudf.concat([indices, indices1], ignore_index=True)
 
@@ -207,13 +229,13 @@ for start in tqdm(range(0, batch_count)):
     print(f"embeddings: \n{df_numeric.iloc[127:128]}")
 
     # Extract indices from the first row (excluding the 'RowNum' column)
-    selected_indices = indices.iloc[127].drop("RowNum").values
+    #selected_indices = indices.iloc[127].drop("RowNum").values
 
-    print(selected_indices)
+    #print(selected_indices)
     # Fetch the rows from the embeddings DataFrame
-    selected_rows = df_numeric.loc[selected_indices]
+    #selected_rows = df_numeric.loc[selected_indices]
 
-    print(selected_rows)
+    #print(selected_rows)
 
     # Save distances
     stream_cudf_to_parquet(distances, 100000, f'distances{start}.parquet')
@@ -224,7 +246,5 @@ for start in tqdm(range(0, batch_count)):
     del df_numeric
     del distances
     del indices
-    del distances1
-    del indices1
     gc.collect()
     rmm.reinitialize(pool_allocator=False)

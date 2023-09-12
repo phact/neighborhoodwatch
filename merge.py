@@ -82,6 +82,12 @@ for start in tqdm(range(0, batch_count)):
                 # Concatenate the distances and indices along the column axis (axis=1)
                 concatenated_distances = pd.concat([final_distances, distances_batch], axis=1)
                 concatenated_indices = pd.concat([final_indices, indices_batch], axis=1)
+                #print(f"final_distances: {final_distances}")
+                #print(f"distances_batch: {distances_batch}")
+                #print(f"concatenated_distances: {concatenated_distances}")
+                #print(f"final_indices: {final_indices}")
+                #print(f"indices_batch: {indices_batch}")
+                #print(f"concatenated_indices: {concatenated_indices}")
 
                 # Convert the DataFrame to numpy arrays for argsort
                 concatenated_distances_np = concatenated_distances.values
