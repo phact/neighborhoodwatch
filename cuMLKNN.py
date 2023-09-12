@@ -100,7 +100,8 @@ rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemor
 batch_size = 543680
 max_memory_threshold = 0.1
 
-table = pq.read_table('split.parquet')
+#table = pq.read_table('split.parquet').sort(['partition_key', 'clustering_column_0'])
+table = pq.read_table('pages_ada_002_sorted.parquet')
 
 #FOR TESTING take the first 10k rows
 #table = table.slice(0, 10000)
@@ -113,7 +114,8 @@ split = True
 # before batching clean up the table
 print(f'length table: {len(table)}')
 
-n = len(table.column('embedding')[0])  # Determine the length of one of the embedding lists
+#n = len(table.column('embedding')[0])  # Determine the length of one of the embedding lists
+n = 1536
 print(f'length {n}')
 arrays = []
 column_names = ['seq_no', 'content']

@@ -26,15 +26,17 @@ def write_ivec_from_dataframe(filename, df):
             f.write(vec.tobytes())
 
 df = read_parquet_to_dataframe('final_distances.parquet')
-write_fvec_from_dataframe('distances.fvec', df)
+write_fvec_from_dataframe('pages_ada_002_distances.fvec', df)
 
-df = read_parquet_to_dataframe('final_indices.parquet')
+df = read_parquet_to_dataframe('pages_ada_002_final_indices.parquet')
 write_ivec_from_dataframe('indices.ivec', df)
 
-exit()
 
-table = pq.read_table('split.parquet')
-n = len(table.column('embedding')[0])  # Determine the length of one of the embedding lists
+#table = pq.read_table('split.parquet')
+table = pq.read_table('pages_ada_002_sorted.parquet')
+
+#n = len(table.column('embedding')[0])  # Determine the length of one of the embedding lists
+n = 1536
 print(f'length {n}')
 arrays = []
 
@@ -54,4 +56,4 @@ for col in columns_to_drop:
 
 df = table.to_pandas()
 
-write_fvec_from_dataframe('base_vectors.fvec', df)
+write_fvec_from_dataframe('pages_ada_002_base_vectors.fvec', df)
