@@ -97,16 +97,38 @@ import rmm
 
 rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
-batch_size = 543680
+#batch_size = 543680
+batch_size = 100000
 max_memory_threshold = 0.1
+
+query_table = pq.read_table('pages_ada_002_query_data_100k_test.parquet').slice(0,10000)
+print(f'query_table length {len(query_table)}')
+
+n = 1536
+print(f'length {n}')
+arrays = []
+column_names = ['text', 'document_id_idx']
+for i in range(n):
+    column_names.append(f'embedding_{i}')
+
+columns_to_drop = list(set(query_table.schema.names) - set(column_names))
+
+print(f'columns_to_drop {columns_to_drop}')
+
+for col in columns_to_drop:
+    if col in query_table.schema.names:  # Check if the column exists in the table
+        col_index = query_table.schema.get_field_index(col)
+        query_table = query_table.remove_column(col_index)
+
+
 
 #table = pq.read_table('split.parquet').sort(['partition_key', 'clustering_column_0'])
 table = pq.read_table('pages_ada_002_sorted.parquet')
 
-#FOR TESTING take the first 10k rows
-#table = table.slice(0, 10000)
+#FOR TESTING take the first n rows
+table = table.slice(0, 100000)
 
-tune_memory()
+#tune_memory()
 
 k = 100
 split = True
@@ -134,20 +156,21 @@ for col in columns_to_drop:
 print(f'batch_size {batch_size}')
 
 batch_count = math.ceil(len(table) / batch_size)
-assert(k <= (len(table) % batch_size))
+assert((len(table) % batch_size == 0) or k <= (len(table) % batch_size))
 print(f'batch_count {batch_count}')
 
 # TODO: remove /10
 # batch_size = int(batch_size/10)
 
 for start in tqdm(range(0, batch_count)):
+    print(f"batch_count {batch_count}")
     batch_offset = start * batch_size
     batch_length = batch_size if start != batch_count-1 else len(table) - batch_offset
-    batch = table.slice(batch_offset, batch_length)
+    dataset_batch = table.slice(batch_offset, batch_length)
     if (start == batch_count-1):
         print(batch_length)
 
-    df = cudf.DataFrame.from_arrow(batch)
+    df = cudf.DataFrame.from_arrow(dataset_batch)
     df_numeric = df.select_dtypes(['float32', 'float64'])
 
     del df
@@ -156,38 +179,42 @@ for start in tqdm(range(0, batch_count)):
 
 
     # sample_df = df_numeric.sample(frac=1)
-    print(f"starting fit for k ={k}")
+    print(f"transform dataset to dlpack")
     #nn = NearestNeighbors(n_neighbors=k, algorithm='brute')
     #nn.fit(df_numeric)
     dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
-    print("done fit")
+    print("done transforming")
 
     print("df_numeric")
     print(df_numeric)
 
     # Split the DataFrame into parts (floor division)
-    splits = 50 * batch_count
-    rows_per_split = len(table) // splits
+    #split_factor = 50
+    split_factor = 1
+    splits = split_factor * batch_count
+    rows_per_split = len(query_table) // splits
 
     distances = cudf.DataFrame()
     indices = cudf.DataFrame()
     if (split):
         for i in tqdm(range(splits)):
-            #print(f"i {i} of {splits}")
+            print(f"i {i} of {splits}")
 
             offset = i * rows_per_split
-            length = rows_per_split if i != splits - 1 else len(table) - offset  # To handle the last chunk
+            length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
             if (i == splits-1):
                 print(length)
-            #print(f"rows_per_split {rows_per_split}")
-            #print(f"offset {offset}")
-            #print(f"length {length}")
+            print(f"rows_per_split {rows_per_split}")
+            print(f"offset {offset}")
+            print(f"length {length}")
 
             # offset, length
-            batch = table.slice(offset, length)
+            #print("query table")
+            #print(query_table)
+            query_batch = query_table.slice(offset, length)
 
-            df1 = cudf.DataFrame.from_arrow(batch)
+            df1 = cudf.DataFrame.from_arrow(query_batch)
             df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
             del df1
@@ -199,9 +226,12 @@ for start in tqdm(range(0, batch_count)):
             #print(f"df_numeric1 Number of rows: {num_rows}")
             #print(f"df_numeric1 Number of columns: {num_columns}")
 
+            #print(f'df_numeric1 {df_numeric1}')
             query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
 
             assert(k <= len(dataset))
+            #print(f'dataset {dataset}')
+            #print(f'query {query}')
             cupydistances1, cupyindices1 = knn(dataset, query, k)
 
             distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
@@ -220,8 +250,8 @@ for start in tqdm(range(0, batch_count)):
     print(len(distances))
     print(len(indices))
     print(batch_size)
-    assert (len(distances) == len(table))
-    assert (len(indices) == len(table))
+    assert (len(distances) == len(query_table))
+    assert (len(indices) == len(query_table))
     print("start*batch_size")
     distances['RowNum'] = range(0, len(distances))
     indices['RowNum'] = range(0, len(indices))
