@@ -1,2 +1,5 @@
 *.parquet
+*.*vec
 venv
+*/__pycache__/*
+.idea/
