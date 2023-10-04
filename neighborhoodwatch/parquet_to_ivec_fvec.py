@@ -34,13 +34,12 @@ def generate_query_vectors_fvec(input_parquet, base_count, query_count):
     table = pq.read_table(input_parquet)
     table = table.slice(0, query_count)
     n = 1536
-    print(f'length {n}')
-    arrays = []
+
     column_names = []
     for i in range(n):
         column_names.append(f'embedding_{i}')
     columns_to_drop = list(set(table.schema.names) - set(column_names))
-    print(f'columns_to_drop {columns_to_drop}')
+
     for col in columns_to_drop:
         if col in table.schema.names:  # Check if the column exists in the table
             col_index = table.schema.get_field_index(col)
@@ -64,13 +63,11 @@ def generate_base_vectors_fvec(input_parquet, base_count, query_count):
     table = pq.read_table(input_parquet)
     table = table.slice(0, base_count)
     n = 1536
-    print(f'length {n}')
-    arrays = []
+
     column_names = []
     for i in range(n):
         column_names.append(f'embedding_{i}')
     columns_to_drop = list(set(table.schema.names) - set(column_names))
-    print(f'columns_to_drop {columns_to_drop}')
     for col in columns_to_drop:
         if col in table.schema.names:  # Check if the column exists in the table
             col_index = table.schema.get_field_index(col)

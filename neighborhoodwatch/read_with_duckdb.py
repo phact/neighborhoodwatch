@@ -20,6 +20,8 @@ print(con.fetchall())
 print("--------------------------------------COUNTS")
 con.sql("select count(*) from '../tests/distances*.parquet' ").show()
 con.sql("select count(*) from '../tests/indices*.parquet' ").show()
+print("--------------------------------------FINAL COUNTS")
+con.sql("select count(*) from '../tests/final_indices.parquet' ").show()
 
 
 #con.sql("select * from './distances1.parquet' where RowNum=4314515 ").show()

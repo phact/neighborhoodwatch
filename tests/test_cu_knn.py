@@ -34,6 +34,11 @@ def generate_test_files():
     normalized_data = df[vector_cols].apply(normalize_vector, axis=1, result_type='expand')
     df[vector_cols] = normalized_data
 
+    tolerance = 1e-7
+    norms = df[vector_cols].apply(np.linalg.norm, axis=1)
+    for norm in norms:
+        assert abs(norm - 1) < tolerance, "Vector is not normalized!"
+
     df.to_parquet(base_vectors_parquet_filename)
 
     data = {
@@ -46,8 +51,12 @@ def generate_test_files():
         data[f"embedding_{i}"] = np.random.rand(num_rows).astype(np.float32)
 
     df = pd.DataFrame(data)
-    df.to_parquet(query_vectors_parquet_filename)
 
+    vector_cols = [f"embedding_{i}" for i in range(dimensions)]
+    normalized_data = df[vector_cols].apply(normalize_vector, axis=1, result_type='expand')
+    df[vector_cols] = normalized_data
+
+    df.to_parquet(query_vectors_parquet_filename)
 
 def test_cu_knn():
     query_filename = 'query_vectors.parquet'
