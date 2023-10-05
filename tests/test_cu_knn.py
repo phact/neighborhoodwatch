@@ -68,4 +68,4 @@ def test_cu_knn():
     base_count = 10
     dimensions = 1536
     k = 2
-    neighborhoodwatch.cu_knn.main(query_filename, query_count, sorted_data_filename, base_count, dimensions, False, k)
+    neighborhoodwatch.cu_knn.compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions, False, k)

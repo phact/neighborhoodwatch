@@ -16,14 +16,13 @@ def get_file_count():
     file_count = 0
     for filename in sorted(glob.glob('./indices*.parquet')):
         match = pattern.match(filename)
-        print(f'filename: {filename}')
         if match:
             i = int(match.group(1))
             file_count = file_count + 1
     return file_count
 
 
-def main():
+def merge_indices_and_distances():
     indices_table = pq.read_table(f"./indices0.parquet")
     distances_table = pq.read_table(f"./distances0.parquet")
 
@@ -41,7 +40,6 @@ def main():
 
     for start in tqdm(range(0, batch_count)):
 
-        print(f'batch: {start}')
         final_indices = pd.DataFrame()
         final_distances = pd.DataFrame()
 
@@ -59,8 +57,8 @@ def main():
                 indices_batch = indices_table.slice(start, batch_size).to_pandas()
                 distances_batch = distances_table.slice(start, batch_size).to_pandas()
             else:
-                indices_batch = indices_table.slice(start, len(indices_table) - start * batch_size).to_pandas()
-                distances_batch = distances_table.slice(start, len(distances_table) - start * batch_size).to_pandas()
+                indices_batch = indices_table.slice(start, len(indices_table) - start * batch_size)
+                distances_batch = distances_table.slice(start, len(distances_table) - start * batch_size)
 
             if ((final_indices.empty) & (final_distances.empty)):
                 final_indices = indices_batch
@@ -78,12 +76,15 @@ def main():
                 # Get the sorted indices for each row in the concatenated distances DataFrame
                 sorted_indices_np = np.argsort(concatenated_distances_np, axis=1)
 
-                # Use the sorted indices to sort the distances and indices DataFrames
-                rows = np.arange(sorted_indices_np.shape[0])[:, None]
-                sorted_distances_np = concatenated_distances_np[rows, sorted_indices_np]
-                sorted_indices_np = concatenated_indices_np[rows, sorted_indices_np]
+                #rows = np.arange(sorted_indices_np.shape[0])[:, None]
+                #sorted_distances_np = concatenated_distances_np[rows, sorted_indices_np]
+                #sorted_indices_np = concatenated_indices_np[rows, sorted_indices_np]
 
-                # Convert the numpy arrays back to DataFrames
+                # Using broadcasting to get the sorted distances and indices
+                sorted_distances_np = np.take_along_axis(concatenated_distances_np, sorted_indices_np, axis=1)
+                sorted_indices_np = np.take_along_axis(concatenated_indices_np, sorted_indices_np, axis=1)
+
+                # Convert the numpy arrays back to DataFrames only when necessary
                 sorted_distances = pd.DataFrame(sorted_distances_np, index=concatenated_distances.index,
                                                 columns=concatenated_distances.columns)
                 sorted_indices = pd.DataFrame(sorted_indices_np, index=concatenated_indices.index,
@@ -96,15 +97,21 @@ def main():
                 # Ensure the final distances are sorted in ascending order for each row
                 assert (final_distances.apply(lambda row: row.is_monotonic_increasing, axis=1).all())
 
-        final_distances['RowNum'] = range(start, start + len(final_distances))
-        final_indices['RowNum'] = range(start, start + len(final_indices))
+        # .copy() is required for https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
+        final_distances_copy = final_distances.copy()
+        final_distances_copy['RowNum'] = pd.Series(dtype=int)
+        final_distances_copy['RowNum'] = range(start, start + len(final_distances))
 
-        final_indices_writer.write_table(pa.Table.from_pandas(final_indices))
-        final_distances_writer.write_table(pa.Table.from_pandas(final_distances))
+        final_indices_copy = final_indices.copy()
+        final_indices_copy['RowNum'] = pd.Series(dtype=int)
+        final_indices_copy['RowNum'] = range(start, start + len(final_distances))
+
+        final_indices_writer.write_table(pa.Table.from_pandas(final_indices_copy))
+        final_distances_writer.write_table(pa.Table.from_pandas(final_distances_copy))
 
     final_indices_writer.close()
     final_distances_writer.close()
 
 
 if __name__ == "__main__":
-    main()
+    merge_indices_and_distances()

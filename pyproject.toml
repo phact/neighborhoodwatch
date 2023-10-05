@@ -36,6 +36,7 @@ typing-extensions = "4.7.1"
 cudf-cu12 = {url = "https://pypi.nvidia.com/cudf-cu12/cudf_cu12-23.8.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"}
 dask-cudf-cu12 = {url = "https://pypi.nvidia.com/dask-cudf-cu12/dask_cudf_cu12-23.8.0-py3-none-any.whl"}
 cuml-cu12 = {url = "https://pypi.nvidia.com/cuml-cu12/cuml_cu12-23.8.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"}
+rich = "^13.6.0"
 
 
 [tool.poetry.group.dev.dependencies]
@@ -44,3 +45,6 @@ pytest = "^7.4.2"
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.scripts]
+nw = "neighborhoodwatch.neighborhoodwatch:main"

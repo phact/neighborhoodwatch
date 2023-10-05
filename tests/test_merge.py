@@ -29,4 +29,4 @@ def generate_test_files():
 def test_merge():
     if 'distances0.parquet' not in os.listdir() or 'indices0.parquet' not in os.listdir():
         generate_test_files()
-    neighborhoodwatch.merge.main()
+    neighborhoodwatch.merge.merge_indices_and_distances()

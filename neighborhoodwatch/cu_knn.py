@@ -9,6 +9,8 @@ import gc
 import math
 from pylibraft.neighbors.brute_force import knn
 import rmm
+from rich import print as rprint
+from rich.markdown import Markdown
 
 
 def stream_cudf_to_parquet(df, chunk_size, filename):
@@ -35,12 +37,12 @@ def stream_cudf_to_parquet(df, chunk_size, filename):
             writer = pq.ParquetWriter(filename, table_chunk.schema)
 
         writer.write_table(table_chunk)
-        print(f"Streamed chunk {i} to {filename}")
 
     writer.close()
 
 
 def tune_memory(table, batch_size, max_memory_threshold, rmm):
+    rprint(Markdown("Tuning memory settings..."))
     batch = table.slice(0, batch_size)
     df = cudf.DataFrame.from_arrow(batch)
 
@@ -63,7 +65,6 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
     batch_size *= factor  # or any other increment factor you find suitable
     while True:
         try:
-            print(f"batch_size {batch_size}")
             rmm.reinitialize(pool_allocator=False)
             batch = table.slice(0, batch_size)
             df = cudf.DataFrame.from_arrow(batch)
@@ -117,8 +118,8 @@ def prep_table(filename, count, n):
     return drop_columns(table, column_names)
 
 
-def main(query_filename, query_count, sorted_data_filename, base_count, dimensions=1536, mem_tune=True, k=100,
-         initial_batch_size=100000, max_memory_threshold=0.1, split=True):
+def compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions=1536, mem_tune=True, k=100,
+                initial_batch_size=100000, max_memory_threshold=0.1, split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     batch_size = initial_batch_size
@@ -149,7 +150,6 @@ def cleanup(*args):
 
 def process_batches(table, query_table, batch_count, batch_size, k, split):
     for start in tqdm(range(0, batch_count)):
-        print(f"batch_count {batch_count}")
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(table) - batch_offset
         dataset_batch = table.slice(batch_offset, batch_length)
@@ -159,9 +159,7 @@ def process_batches(table, query_table, batch_count, batch_size, k, split):
 
         cleanup(df)
 
-        print(f"transform dataset to dlpack")
         dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
-        print("done transforming")
 
         # Split the DataFrame into parts (floor division)
         # TODO: pull out this variable
@@ -174,8 +172,6 @@ def process_batches(table, query_table, batch_count, batch_size, k, split):
         indices = cudf.DataFrame()
         if split:
             for i in tqdm(range(splits)):
-                print(f"i {i} of {splits}")
-
                 offset = i * rows_per_split
                 length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
@@ -225,4 +221,4 @@ if __name__ == "__main__":
     mem_tune = sys.argv[6] == 'True'
     k = int(sys.argv[7])
 
-    main(query_filename, query_count, sorted_data_filename, base_count, dimensions, True, k)
+    compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions, True, k)

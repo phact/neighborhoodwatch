@@ -1,10 +1,11 @@
 import os
 
+import struct
 import numpy as np
 import pandas as pd
 import pytest
-import struct
-from neighborhoodwatch.parquet_to_ivec_fvec import generate_query_vectors_fvec, generate_indices_ivec, generate_base_vectors_fvec
+from neighborhoodwatch.parquet_to_ivec_fvec import generate_query_vectors_fvec, generate_indices_ivec, \
+    generate_base_vectors_fvec, count_vectors
 import pyarrow.parquet as pq
 
 def generate_test_files():
@@ -47,20 +48,10 @@ def generate_test_files():
     df = pd.DataFrame(data)
     df.to_parquet(query_vectors_parquet_filename)
 
-def count_vectors(filename):
-    with open(filename, 'rb') as f:
-        count = 0
-        while True:
-            dim = f.read(4)
-            if not dim:
-                break
-            dim = struct.unpack('i', dim)[0]
-            f.read(4 * dim)
-            count += 1
-        return count
 
 def get_first_vector(filename):
     return get_nth_vector(filename, 0)
+
 
 def get_nth_vector(filename, n):
     format_char = 'f'
@@ -76,8 +67,10 @@ def get_nth_vector(filename, n):
 
     return vector
 
+
 def dot_product(A, B):
     return sum(a * b for a, b in zip(A, B))
+
 
 def compute_similarities(query_vector, filename, indexes):
     last_similarity = 1
@@ -120,7 +113,7 @@ def test_generate_base_vectors_fvec():
         generate_test_files()
     base_count = 10
     query_count = 10
-    filename = generate_base_vectors_fvec(input_parquet, base_count, query_count)
+    filename = generate_base_vectors_fvec(input_parquet, base_count)
     assert filename == 'pages_ada_002_10_base_vectors.fvec'
     assert count_vectors(filename) == base_count
 
