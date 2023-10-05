@@ -14,16 +14,17 @@ sudo dpkg -i cuda-keyring_1.1-1_all.deb
 sudo apt-get update
 sudo apt-get -y install cuda
 ```
+install poetry per https://python-poetry.org/docs/#installation
 
+    curl -sSL https://install.python-poetry.org | python3 -
 
-install python dependencies using poetry
+install python dependencies using poetry:
 
     poetry install
 
+run nw with poetry:
 
-run nw with poetry
-
-   poetry run nw 'data/pages_ada_002_query_data_100k_test.parquet' 10000 'data/pages_ada_002_sorted.parquet' 100000 1536 -k 100
+    poetry run nw 'data/pages_ada_002_query_data_100k_test.parquet' 10000 'data/pages_ada_002_sorted.parquet' 100000 1536 -k 100
 
 
 usage:
