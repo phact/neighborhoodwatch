@@ -37,6 +37,10 @@ cudf-cu12 = {url = "https://pypi.nvidia.com/cudf-cu12/cudf_cu12-23.8.0-cp310-cp3
 dask-cudf-cu12 = {url = "https://pypi.nvidia.com/dask-cudf-cu12/dask_cudf_cu12-23.8.0-py3-none-any.whl"}
 cuml-cu12 = {url = "https://pypi.nvidia.com/cuml-cu12/cuml_cu12-23.8.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"}
 rich = "^13.6.0"
+datasets = "^2.14.5"
+spacy = "^3.7.1"
+en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0.tar.gz" }
+openai = "^0.28.1"
 
 
 [tool.poetry.group.dev.dependencies]

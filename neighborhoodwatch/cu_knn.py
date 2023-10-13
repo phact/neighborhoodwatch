@@ -185,6 +185,8 @@ def process_batches(table, query_table, batch_count, batch_size, k, split):
 
                 assert (k <= len(dataset))
 
+                print(f'dataset shape {dataset.shape}')
+                print(f'query shape {query.shape}')
                 cupydistances1, cupyindices1 = knn(dataset, query, k)
 
                 distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
