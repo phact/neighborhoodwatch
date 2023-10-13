@@ -33,15 +33,16 @@ def get_batch_embeddings_ada_002(text_list):
         start = i * chunk_size
         end = min(start + chunk_size, total_items)
         process = text_list[start:end]
+        zero_vector = [0.0] * 1536
 
         try:
             response = openai.Embedding.create(model="text-embedding-ada-002", input=process)
         except Exception as e:
             print(f"failed to get embeddings for {process}")
             print(e)
-            # append empty embeddings to keep the index in sync
+            # append zero vector when openai fails
             for _ in process:
-                embeddings.append([])
+                embeddings.append(zero_vector)
             continue
 
         for item in response["data"]:
