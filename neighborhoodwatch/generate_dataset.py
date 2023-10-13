@@ -25,7 +25,7 @@ nlp.add_pipe("sentencizer")
 
 def get_batch_embeddings_ada_002(text_list):
     embeddings = []
-    chunk_size = 100
+    chunk_size = 80
     total_items = len(text_list)
     chunks = math.ceil(total_items / chunk_size)
 
@@ -136,39 +136,29 @@ def process_dataset(dataset, row_count, embedding_column, meta_array=[], embeddi
 
 
 def write_to_parquet(source, columns, meta_array, embedding_array):
-    print("embedding array length ")
-    print(len(embedding_array))
-    print("meta array length ")
-    print(len(meta_array))
 
     lengths = [len(item) for item in meta_array]
-    print("meta array item lengths ")
-    print(set(lengths))
 
     lengths = [len(item) for item in embedding_array]
-    print("embedding array item lengths ")
-    print(set(lengths))
 
-    embeddings = np.array(embedding_array)
-    meta = np.array(meta_array)
-
-    filename = f'./{source}_data_{len(embeddings)}.parquet'
+    filename = f'./{source}_data_{len(embedding_array)}.parquet'
     chunk_size = 1000
 
-    num_chunks = len(embeddings) // chunk_size + (len(embeddings) % chunk_size != 0)
+    num_chunks = len(embedding_array) // chunk_size + (len(embedding_array) % chunk_size != 0)
 
     meta_columns = columns.copy()
-    #TODO fix here maybe?
-    for i in range(embeddings.shape[1]):
+    for i in range(len(embedding_array[0])):
         columns.append(f"embedding_{i}")
 
     writer = None
-    for idx in range(num_chunks):
+    print(f"writing file {filename}")
+    for idx in tqdm(range(num_chunks)):
+        print(f"chunk {idx}")
         start_idx = idx * chunk_size
         end_idx = start_idx + chunk_size
 
-        meta_chunk = meta[start_idx:end_idx]
-        embeddings_chunk = embeddings[start_idx:end_idx]
+        meta_chunk = np.array(meta_array[start_idx:end_idx])
+        embeddings_chunk = np.array(embedding_array[start_idx:end_idx])
 
         # nparray_chunk = np.hstack((meta_chunk, embeddings_chunk))
         # df_chunk = pd.DataFrame(nparray_chunk, columns=columns)
