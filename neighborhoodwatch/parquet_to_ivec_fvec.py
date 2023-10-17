@@ -52,7 +52,7 @@ def generate_query_vectors_fvec(input_parquet, base_count, query_count):
             col_index = table.schema.get_field_index(col)
             table = table.remove_column(col_index)
     df = table.to_pandas()
-    output_fvec = f'pages_ada_002_{base_count}_query_vectors_{query_count}.fvec'
+    output_fvec = f'ada_002_{base_count}_query_vectors_{query_count}.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f')
     return output_fvec
 
@@ -72,7 +72,7 @@ def generate_base_vectors_fvec(input_parquet, base_count):
             col_index = table.schema.get_field_index(col)
             table = table.remove_column(col_index)
     df = table.to_pandas()
-    output_fvec = f'pages_ada_002_{base_count}_base_vectors.fvec'
+    output_fvec = f'ada_002_{base_count}_base_vectors.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f')
     return output_fvec
 
@@ -80,7 +80,7 @@ def generate_base_vectors_fvec(input_parquet, base_count):
 # Generate indices.ivec file
 def generate_indices_ivec(input_parquet, base_count, query_count):
     df = read_parquet_to_dataframe(input_parquet)
-    output_ivec = f'pages_ada_002_{base_count}_indices_query_{query_count}.ivec'
+    output_ivec = f'ada_002_{base_count}_indices_query_{query_count}.ivec'
     write_ivec_fvec_from_dataframe(output_ivec, df, 'i')
     return output_ivec
 

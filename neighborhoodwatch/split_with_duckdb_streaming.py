@@ -5,28 +5,28 @@ import pyarrow.parquet as pq
 
 # to start an in-memory database
 con = duckdb.connect(database=':memory:')
-con.sql("SELECT count(*) FROM './pages_ada_002.parquet'").show()
+con.sql("SELECT count(*) FROM './ada_002.parquet'").show()
 
-con.sql("describe table './pages_ada_002.parquet'").show()
+con.sql("describe table './ada_002.parquet'").show()
 
-con.execute("describe table './pages_ada_002.parquet'")
+con.execute("describe table './ada_002.parquet'")
 print(con.fetchall())
 
 
-con.execute("SELECT count(*) FROM './pages_ada_002.parquet'")
+con.execute("SELECT count(*) FROM './ada_002.parquet'")
 table_count = con.fetchone()[0]
 
-con.execute("SELECT ARRAY_LENGTH(embedding) FROM './pages_ada_002.parquet' limit 1")
+con.execute("SELECT ARRAY_LENGTH(embedding) FROM './ada_002.parquet' limit 1")
 max_length = con.fetchone()[0]
 
 print(f"max_length {max_length}")
 
 select_columns = ", ".join([f"embedding[{i + 1}] AS embedding_{i}" for i in range(max_length)])
-query = f"SELECT partition_key, clustering_key_0, content, title, url,  {select_columns} FROM 'pages_ada_002.parquet'"
+query = f"SELECT partition_key, clustering_key_0, content, title, url,  {select_columns} FROM 'ada_002.parquet'"
 
 
 # Define the path for the new Parquet file
-new_parquet_path = 'pages_ada_002_split.parquet'
+new_parquet_path = 'ada_002_split.parquet'
 
 
 batch_size = 1000000 

@@ -93,7 +93,7 @@ def test_generate_query_vectors_fvec():
     base_count = 10
     query_count = 10
     filename = generate_query_vectors_fvec(input_parquet, base_count, query_count)
-    assert filename == 'pages_ada_002_10_query_vectors_10.fvec'
+    assert filename == 'ada_002_10_query_vectors_10.fvec'
     assert count_vectors(filename) == query_count
 
 def test_generate_indices_ivec():
@@ -103,7 +103,7 @@ def test_generate_indices_ivec():
     base_count = 10
     query_count = 10
     filename = generate_indices_ivec(input_parquet, base_count, query_count)
-    assert filename == 'pages_ada_002_10_indices_query_10.ivec'
+    assert filename == 'ada_002_10_indices_query_10.ivec'
     assert count_vectors(filename) == base_count
 
 
@@ -114,7 +114,7 @@ def test_generate_base_vectors_fvec():
     base_count = 10
     query_count = 10
     filename = generate_base_vectors_fvec(input_parquet, base_count)
-    assert filename == 'pages_ada_002_10_base_vectors.fvec'
+    assert filename == 'ada_002_10_base_vectors.fvec'
     assert count_vectors(filename) == base_count
 
     table = pq.read_table(input_parquet)
@@ -132,9 +132,9 @@ def test_similarity():
     test_generate_indices_ivec()
     test_generate_base_vectors_fvec()
     test_generate_query_vectors_fvec()
-    ivec_index_filename = 'pages_ada_002_10_indices_query_10.ivec'
-    fvec_query_vector_filename = 'pages_ada_002_10_query_vectors_10.fvec'
-    fvec_base_vector_filename = 'pages_ada_002_10_base_vectors.fvec'
+    ivec_index_filename = 'ada_002_10_indices_query_10.ivec'
+    fvec_query_vector_filename = 'ada_002_10_query_vectors_10.fvec'
+    fvec_base_vector_filename = 'ada_002_10_base_vectors.fvec'
 
     assert count_vectors(ivec_index_filename) == count_vectors(fvec_query_vector_filename)
     for n in range(count_vectors(fvec_query_vector_filename)):

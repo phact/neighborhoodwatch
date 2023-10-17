@@ -26,6 +26,6 @@ con.sql("select count(*) from '../tests/final_indices.parquet' ").show()
 
 #con.sql("select * from './distances1.parquet' where RowNum=4314515 ").show()
 #con.sql("select * from './indices1.parquet' where RowNum=4314515 ").show()
-con.sql("select count(*) from '/home/tato/Desktop/neighborhoodwatch/pages_ada_002_sorted.parquet'").show()
-con.sql("select count(*) from '/home/tato/Desktop/neighborhoodwatch/pages_ada_002_query_data_100k_test.parquet'").show()
+con.sql("select count(*) from '/home/tato/Desktop/neighborhoodwatch/ada_002_sorted.parquet'").show()
+con.sql("select count(*) from '/home/tato/Desktop/neighborhoodwatch/ada_002_query_data_100k_test.parquet'").show()
 
