@@ -122,7 +122,6 @@ def process_dataset(streamer, dataset, row_count, embedding_column, meta_array=[
                     if embedding_counter >= row_count:
                         print(f"Total embeddings so far {embedding_counter} out of {row_count}")
                         streamer.stream_to_parquet(meta_array, embedding_array)
-                        streamer.close()
                         return embedding_counter
             streamer.stream_to_parquet(meta_array, embedding_array)
             i = 0
@@ -132,7 +131,6 @@ def process_dataset(streamer, dataset, row_count, embedding_column, meta_array=[
             text_map = []
         row_counter += 1
 
-    streamer.close()
     return embedding_counter
 
 
@@ -209,6 +207,7 @@ def generate_query_dataset(row_count):
     full_dataset = load_dataset(QUERY_DATASET, cache_dir="./data")["train"]
     streamer = ParquetStreamer(source, full_dataset.column_names, row_count)
     processed_count = process_dataset(streamer, full_dataset, row_count, "question")
+    streamer.close()
     assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
     return filename
 
@@ -262,4 +261,5 @@ def generate_base_dataset(query_vector_filename, row_count):
         processed_count += process_dataset(streamer, filtered_dataset, row_count - processed_count, "text")
         assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
 
+    streamer.close()
     return filename
