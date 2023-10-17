@@ -1,6 +1,5 @@
 import math
 import os
-import gc
 import multiprocessing
 import time
 
@@ -22,10 +21,9 @@ QUERY_DATASET = "squad"
 nlp = spacy.blank("en")
 nlp.add_pipe("sentencizer")
 
-
 def get_batch_embeddings_ada_002(text_list):
     embeddings = []
-    chunk_size = 80
+    chunk_size = 50
     total_items = len(text_list)
     chunks = math.ceil(total_items / chunk_size)
 
@@ -70,12 +68,10 @@ def get_embeddings_from_map(text_map):
     return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map]
 
 
-def process_dataset(dataset, row_count, embedding_column, meta_array=[], embedding_array=[]):
-    sentence_batch_size = 1000
+def process_dataset(streamer, dataset, row_count, embedding_column, meta_array=[], embedding_array=[]):
+    sentence_batch_size = 10000
     sentence_batch_size = min(sentence_batch_size, row_count)
     embedding_counter = 0
-
-    documents = dataset[embedding_column]
 
     i = 0
     row_counter = 0
@@ -110,8 +106,6 @@ def process_dataset(dataset, row_count, embedding_column, meta_array=[], embeddi
                             #assert dataset[column][index] == active_rows[index][column], f"index mismatch {dataset[column][index]} != {row[column]}"
                             meta_row_array.append(title_column_value.replace("_", " "))
                         elif column == embedding_column:
-                            if (text_map[index][0] != index):
-                                print("hi")
                             assert text_map[index][0] == index, f"index mismatch {text_map[0][0]} != {index}"
 
                             value = text_map[index][1][idx]
@@ -127,24 +121,24 @@ def process_dataset(dataset, row_count, embedding_column, meta_array=[], embeddi
                     embedding_counter += 1
                     if embedding_counter >= row_count:
                         print(f"Total embeddings so far {embedding_counter} out of {row_count}")
-                        return (meta_array, embedding_array)
+                        streamer.stream_to_parquet(meta_array, embedding_array)
+                        streamer.close()
+                        return embedding_counter
+            streamer.stream_to_parquet(meta_array, embedding_array)
             i = 0
+            meta_array = []
+            embedding_array = []
             active_rows = []
             text_map = []
         row_counter += 1
-    return (meta_array, embedding_array)
+
+    streamer.close()
+    return embedding_counter
 
 
 def write_to_parquet(source, columns, meta_array, embedding_array):
 
-    lengths = [len(item) for item in meta_array]
-
-    lengths = [len(item) for item in embedding_array]
-
     filename = f'./{source}_data_{len(embedding_array)}.parquet'
-    chunk_size = 1000
-
-    num_chunks = len(embedding_array) // chunk_size + (len(embedding_array) % chunk_size != 0)
 
     meta_columns = columns.copy()
     for i in range(len(embedding_array[0])):
@@ -152,32 +146,57 @@ def write_to_parquet(source, columns, meta_array, embedding_array):
 
     writer = None
     print(f"writing file {filename}")
-    for idx in tqdm(range(num_chunks)):
-        print(f"chunk {idx}")
-        start_idx = idx * chunk_size
-        end_idx = start_idx + chunk_size
 
-        meta_chunk = np.array(meta_array[start_idx:end_idx])
-        embeddings_chunk = np.array(embedding_array[start_idx:end_idx])
+    columns_list = [pd.DataFrame(meta_array, columns=meta_columns)]
+    for i, column in enumerate(embedding_array.T):
+        columns_list.append(pd.DataFrame(column.astype('float32'), columns=[f'embedding_{i}']))
 
-        # nparray_chunk = np.hstack((meta_chunk, embeddings_chunk))
-        # df_chunk = pd.DataFrame(nparray_chunk, columns=columns)
+    df = pd.concat(columns_list, axis=1)
+    table = pa.Table.from_pandas(df)
 
-        columns_list = [pd.DataFrame(meta_chunk, columns=meta_columns)]
-        for i, column in enumerate(embeddings_chunk.T):
-            columns_list.append(pd.DataFrame(column.astype('float32'), columns=[f'embedding_{i}']))
-
-        df_chunk = pd.concat(columns_list, axis=1)
-        table_chunk = pa.Table.from_pandas(df_chunk)
-
-        if writer is None:
-            writer = pq.ParquetWriter(filename, table_chunk.schema)
-        writer.write_table(table_chunk)
+    if writer is None:
+        writer = pq.ParquetWriter(filename, table.schema)
+    writer.write_table(table)
 
     if writer:
         writer.close()
     print(f"wrote {filename}")
     return filename
+
+
+class ParquetStreamer:
+    def __init__(self, source, columns, row_count):
+        self.source = source
+        self.columns = columns
+        self.filename = f'./{self.source}_data_{row_count}.parquet'
+        self.writer = None
+        print(f"Initiated streaming to file {self.filename}")
+
+    def stream_to_parquet(self, meta_array, embedding_array):
+        meta_array = np.array(meta_array)
+        embedding_array = np.array(embedding_array)
+
+        meta_columns = self.columns.copy()
+
+        for i in range(embedding_array.shape[1]):
+            meta_columns.append(f"embedding_{i}")
+
+        columns_list = [pd.DataFrame(meta_array, columns=self.columns)]
+        for i, column in enumerate(embedding_array.T):
+            columns_list.append(pd.DataFrame(column.astype('float32'), columns=[f'embedding_{i}']))
+
+        df = pd.concat(columns_list, axis=1)
+        table = pa.Table.from_pandas(df)
+
+        if self.writer is None:
+            self.writer = pq.ParquetWriter(self.filename, table.schema)
+
+        self.writer.write_table(table)
+
+    def close(self):
+        if self.writer:
+            self.writer.close()
+            print(f"Finished streaming to {self.filename}")
 
 
 def generate_query_dataset(row_count):
@@ -188,20 +207,14 @@ def generate_query_dataset(row_count):
         return filename
 
     full_dataset = load_dataset(QUERY_DATASET, cache_dir="./data")["train"]
-    both_arrays = process_dataset(full_dataset, row_count, "question")
-    meta_array = both_arrays[0]
-    embedding_array = both_arrays[1]
-
-    meta_array = meta_array[:row_count]
-    embedding_array = embedding_array[:row_count]
-
-    print(f"Loaded dataset: {QUERY_DATASET}")
-    return write_to_parquet(source, full_dataset.column_names, meta_array, embedding_array)
+    streamer = ParquetStreamer(source, full_dataset.column_names, row_count)
+    processed_count = process_dataset(streamer, full_dataset, row_count, "question")
+    assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
+    return filename
 
 
 def generate_base_dataset(query_vector_filename, row_count):
-    meta_array = []
-    embedding_array = []
+    processed_count = 0
 
     source = "base_vector"
     filename = f'./{source}_data_{row_count}.parquet'
@@ -213,7 +226,9 @@ def generate_base_dataset(query_vector_filename, row_count):
     query_titles = pc.unique(query_dataset.column("title")).to_pylist()
 
     full_dataset = load_dataset(BASE_DATASET, BASE_CONFIG, cache_dir="./data")["train"]
-    # TODO consider itterable datset
+    streamer = ParquetStreamer(source, full_dataset.column_names, row_count)
+
+    # TODO consider iterable dataset
     num_cores = multiprocessing.cpu_count()
     shuffled_dataset = full_dataset  # .shuffle(seed=42).flatten_indices(num_proc=num_cores)
 
@@ -228,14 +243,10 @@ def generate_base_dataset(query_vector_filename, row_count):
         print(f"no matching base title for query titles {query_titles}")
     else:
         print("processing dataset")
-        both_arrays = process_dataset(filtered_dataset, row_count, "text")
-        meta_array = both_arrays[0]
-        embedding_array = both_arrays[1]
+        processed_count = process_dataset(streamer, filtered_dataset, row_count, "text")
+        assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
-        meta_array = meta_array[:row_count]
-        embedding_array = embedding_array[:row_count]
-
-    if row_count > len(meta_array):
+    if row_count > processed_count:
         def title_is_not_in(example):
             return example['title'] not in query_titles
 
@@ -246,34 +257,9 @@ def generate_base_dataset(query_vector_filename, row_count):
         print(f'filter dataset')
         print(f'Time taken: {elapsed_time} seconds')
 
-        # title_in_mask = pa.compute.is_in(arrow_table.column("title"), query_titles)
-        # title_not_in_mask = pc.invert(title_in_mask)
-        # filtered_table = arrow_table.filter(title_not_in_mask)
-        # filtered_table_arrow = pa.Table.from_batches(filtered_table.to_batches())
-
-        # n_rows = filtered_table.num_rows
-        # shuffled_indices = np.arange(n_rows)
-        # np.random.shuffle(shuffled_indices)
-
-        # shuffled_table = filtered_table_arrow.take(pa.array(shuffled_indices))
-
-        # base_dataset = Dataset.from_pandas(filtered_table_arrow.to_pandas())
-
-        # consider filterd_dataset.map(
-        # process_dataset,
-        # kwargs={"row_count": row_count - len(meta_array), "embedding_column": "text"},
-        # batched=True,
-        # batch_size=1000,
-        # num_proc=num_cores
-        # )
         print("processing dataset")
-        both_arrays = process_dataset(filtered_dataset, row_count - len(meta_array), "text", meta_array,
-                                      embedding_array)
-        meta_array = both_arrays[0]
-        embedding_array = both_arrays[1]
+        #filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
+        processed_count += process_dataset(streamer, filtered_dataset, row_count - processed_count, "text")
+        assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
 
-        meta_array = meta_array[:row_count]
-        embedding_array = embedding_array[:row_count]
-
-    print("writing dataset")
-    return write_to_parquet(source, full_dataset.column_names, meta_array, embedding_array)
+    return filename

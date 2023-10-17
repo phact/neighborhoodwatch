@@ -79,8 +79,8 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
                 print(f"found threshold {batch_size}")
                 break
             else:
-                print(memory_used / total_gpu_memory)
-                batch_size *= 1.2  # or any other increment factor you find suitable
+                print(f"memory used ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
+                batch_size *= 1.2
 
         except Exception as e:
             batch_size = int(0.8 * batch_size)
