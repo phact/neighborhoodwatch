@@ -1,6 +1,7 @@
 import sys
 
 import cudf
+import numpy as np
 import pyarrow.parquet as pq
 import cupy as cp
 from tqdm import tqdm
@@ -11,6 +12,10 @@ from pylibraft.neighbors.brute_force import knn
 import rmm
 from rich import print as rprint
 from rich.markdown import Markdown
+import pyarrow.dataset as ds
+
+
+from neighborhoodwatch.parquet_to_ivec_fvec import dot_product
 
 
 def stream_cudf_to_parquet(df, chunk_size, filename):
@@ -41,9 +46,10 @@ def stream_cudf_to_parquet(df, chunk_size, filename):
     writer.close()
 
 
-def tune_memory(table, batch_size, max_memory_threshold, rmm):
+def tune_memory(dataset, batch_size, max_memory_threshold, rmm, column_names):
     rprint(Markdown("Tuning memory settings..."))
-    batch = table.slice(0, batch_size)
+    indices = np.arange(0, batch_size)
+    batch = drop_columns(dataset.take(indices), column_names)
     df = cudf.DataFrame.from_arrow(batch)
 
     import nvidia_smi
@@ -66,7 +72,8 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
     while True:
         try:
             rmm.reinitialize(pool_allocator=False)
-            batch = table.slice(0, batch_size)
+            indices = np.arange(0, batch_size)
+            batch = drop_columns(dataset.take(indices), column_names)
             df = cudf.DataFrame.from_arrow(batch)
 
             # Measure GPU memory usage after converting to cuDF dataframe
@@ -93,6 +100,13 @@ def load_table(filename, start, end):
     return pq.read_table(filename).slice(start, end)
 
 
+def load_dataset(filename, start, end):
+    #indices = np.arange(start, end)
+    #dataset = ds.dataset(filename, format="parquet").take(indices)
+    dataset = ds.dataset(filename, format="parquet")
+    return dataset
+
+
 def drop_columns(table, keep_columns):
     columns_to_drop = list(set(table.schema.names) - set(keep_columns))
     for col in columns_to_drop:
@@ -102,20 +116,25 @@ def drop_columns(table, keep_columns):
     return table
 
 
-def get_embedding_count(table):
-    column_names = table.schema.names
+def get_embedding_count(dataset):
+    column_names = dataset.schema.names
     matching_columns = [name for name in column_names if name.startswith('embedding_')]
     return len(matching_columns)
 
 
-def prep_table(filename, count, n):
-    table = load_table(filename, 0, count)
-    assert get_embedding_count(table) == n
-    assert len(table) == count, f"Expected {count} rows, got {len(table)} rows."
+def dataset_count(dataset):
+    return dataset.scanner(batch_size=100000).count_rows()
+
+
+def prep_dataset(filename, count, n):
+    dataset = load_dataset(filename, 0, count)
+    assert get_embedding_count(dataset) == n
+    #ds_count = dataset_count(dataset)
+    #assert ds_count == count, f"Expected {count} rows, got {ds_count} rows."
     column_names = ['text', 'document_id_idx']
     for i in range(n):
         column_names.append(f'embedding_{i}')
-    return drop_columns(table, column_names)
+    return dataset, column_names
 
 
 def compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions=1536, mem_tune=True, k=100,
@@ -126,16 +145,21 @@ def compute_knn(query_filename, query_count, sorted_data_filename, base_count, d
     # batch_size = 543680
 
     n = dimensions
-    query_table = prep_table(query_filename, query_count, n)
-    table = prep_table(sorted_data_filename, base_count, n)
+    query_dataset, query_column_names = prep_dataset(query_filename, query_count, n)
+    base_dataset, base_column_names = prep_dataset(sorted_data_filename, base_count, n)
 
     if mem_tune:
-        batch_size = tune_memory(table, batch_size, max_memory_threshold, rmm)
+        batch_size = tune_memory(base_dataset, batch_size, max_memory_threshold, rmm, base_column_names)
 
-    batch_count = math.ceil(len(table) / batch_size)
-    assert ((len(table) % batch_size == 0) or k <= (len(table) % batch_size)), f"Cannot generate k of {k} with only {len(table)} rows and batch_size of {batch_size}."
+    #base_length = dataset_count(base_dataset)
+    #query_length = dataset_count(query_dataset)
+    base_length = base_count
+    query_length = query_count
 
-    process_batches(table, query_table, batch_count, batch_size, k, split)
+    batch_count = math.ceil(base_length / batch_size)
+    assert (base_length % batch_size == 0) or k <= (base_length % batch_size), f"Cannot generate k of {k} with only {base_length} rows and batch_size of {batch_size}."
+
+    process_batches(base_dataset, base_length, query_dataset, query_length, batch_count, batch_size, k, split, query_column_names, base_column_names)
 
 
 def cleanup(*args):
@@ -148,11 +172,13 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(table, query_table, batch_count, batch_size, k, split):
+def process_batches(base_dataset, base_length, query_dataset, query_length, batch_count, batch_size, k, split, query_column_names, base_column_names):
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
-        batch_length = batch_size if start != batch_count - 1 else len(table) - batch_offset
-        dataset_batch = table.slice(batch_offset, batch_length)
+        batch_length = batch_size if start != batch_count - 1 else base_length - batch_offset
+
+        np_index = np.arange(batch_offset, batch_offset + batch_length)
+        dataset_batch = drop_columns(base_dataset.take(np_index), base_column_names)
 
         df = cudf.DataFrame.from_arrow(dataset_batch)
         df_numeric = df.select_dtypes(['float32', 'float64'])
@@ -166,16 +192,17 @@ def process_batches(table, query_table, batch_count, batch_size, k, split):
         # split_factor = 50
         split_factor = 1
         splits = split_factor * batch_count
-        rows_per_split = len(query_table) // splits
+        rows_per_split = query_length // splits
 
         distances = cudf.DataFrame()
         indices = cudf.DataFrame()
         if split:
             for i in tqdm(range(splits)):
                 offset = i * rows_per_split
-                length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
+                length = rows_per_split if i != splits - 1 else query_length - offset  # To handle the last chunk
 
-                query_batch = query_table.slice(offset, length)
+                np_index = np.arange(offset, offset + length)
+                query_batch = drop_columns(query_dataset.take(np_index), query_column_names)
 
                 df1 = cudf.DataFrame.from_arrow(query_batch)
                 df_numeric1 = df1.select_dtypes(['float32', 'float64'])
@@ -185,21 +212,24 @@ def process_batches(table, query_table, batch_count, batch_size, k, split):
 
                 assert (k <= len(dataset))
 
-                print(f'dataset shape {dataset.shape}')
-                print(f'query shape {query.shape}')
                 cupydistances1, cupyindices1 = knn(dataset, query, k)
 
                 distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
                 # add batch_offset to indices
                 indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
 
+                #cosine_dist= cosine(dataset[775].get(),query[0].get())
+                #distance = 1 - dot_product(dataset[775],query[0])
+                #isClose = np.isclose(2*distance, distances1[0][0])
+                #print(isClose)
+
                 distances = cudf.concat([distances, distances1], ignore_index=True)
                 indices = cudf.concat([indices, indices1], ignore_index=True)
 
             distances.columns = distances.columns.astype(str)
             indices.columns = indices.columns.astype(str)
-        assert (len(distances) == len(query_table))
-        assert (len(indices) == len(query_table))
+        assert (len(distances) == query_length)
+        assert (len(indices) == query_length)
 
         distances['RowNum'] = range(0, len(distances))
         indices['RowNum'] = range(0, len(indices))
