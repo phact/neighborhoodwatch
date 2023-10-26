@@ -7,7 +7,13 @@ import sys
 from rich import print as rprint
 from rich.markdown import Markdown
 import time
+import os
 
+
+def cleanup_partial_parquet():
+    for filename in os.listdir():
+        if filename.startswith("distances") or filename.startswith("indices") or filename.startswith("final"):
+            os.remove(filename)
 
 
 def main():
@@ -40,6 +46,8 @@ def main():
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
+    cleanup_partial_parquet()
+
     rprint(Markdown("**Computing knn** "),'')
     section_time = time.time()
     neighborhoodwatch.cu_knn.compute_knn(query_filename, args.query_count, base_filename, args.base_count,
@@ -55,10 +63,16 @@ def main():
 
     rprint(Markdown("**Generating ivec's and fvec's** "), '')
     section_time = time.time()
-    neighborhoodwatch.parquet_to_ivec_fvec.generate_files('final_indices.parquet', base_filename, args.base_count,
-                                                          args.query_count)
+    query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = neighborhoodwatch.parquet_to_ivec_fvec.generate_files('final_indices.parquet', base_filename, query_filename, 'final_distances.parquet', args.base_count,
+                                                          args.query_count, args.k, args.dimensions)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
+
+    #rprint(Markdown("**Validating ivec's and fvec's** "), '')
+    #section_time = time.time()
+    #neighborhoodwatch.parquet_to_ivec_fvec.validate_files(query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec)
+    #rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
+    #rprint(Markdown("---"),'')
 
 
 if __name__ == "__main__":
