@@ -13,6 +13,8 @@ import rmm
 from rich import print as rprint
 from rich.markdown import Markdown
 import pyarrow.dataset as ds
+import pyarrow as pa
+
 
 
 from neighborhoodwatch.parquet_to_ivec_fvec import dot_product
@@ -48,6 +50,7 @@ def stream_cudf_to_parquet(df, chunk_size, filename):
 
 def tune_memory(dataset, batch_size, max_memory_threshold, rmm, column_names):
     rprint(Markdown("Tuning memory settings..."))
+    print(f"batch_size {batch_size}")
     indices = np.arange(0, batch_size)
     batch = drop_columns(dataset.take(indices), column_names)
     df = cudf.DataFrame.from_arrow(batch)
@@ -66,7 +69,7 @@ def tune_memory(dataset, batch_size, max_memory_threshold, rmm, column_names):
     # Measure GPU memory usage after converting to cuDF dataframe
     memory_used = df.memory_usage().sum()
     print(f"memory_used {memory_used}")
-    factor = math.ceil((total_gpu_memory * .2) / memory_used)
+    factor = math.ceil((total_gpu_memory * max_memory_threshold) / memory_used)
     print(f"factor {factor}")
     batch_size *= factor  # or any other increment factor you find suitable
     while True:
@@ -79,6 +82,9 @@ def tune_memory(dataset, batch_size, max_memory_threshold, rmm, column_names):
             # Measure GPU memory usage after converting to cuDF dataframe
             memory_used = df.memory_usage().sum()
 
+            print(f"mm_thresh{max_memory_threshold}")
+            print(f"mem limit {max_memory_threshold*total_gpu_memory}")
+            print(f"mem used {memory_used}")
             if memory_used > max_memory_threshold * total_gpu_memory:
                 # If the memory used goes beyond the threshold, break and set the batch size
                 # to the last successful size.
@@ -131,14 +137,19 @@ def prep_dataset(filename, count, n):
     assert get_embedding_count(dataset) == n
     #ds_count = dataset_count(dataset)
     #assert ds_count == count, f"Expected {count} rows, got {ds_count} rows."
-    column_names = ['text', 'document_id_idx']
+    all_columns = dataset.schema.names
+    if 'text' in all_columns:
+        column_names = ['text']
+    if 'question' in all_columns:
+        column_names = ['question']
+
     for i in range(n):
         column_names.append(f'embedding_{i}')
     return dataset, column_names
 
 
 def compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions=1536, mem_tune=True, k=100,
-                initial_batch_size=100000, max_memory_threshold=0.1, split=True):
+                initial_batch_size=800000, max_memory_threshold=0.4, split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     batch_size = initial_batch_size
@@ -159,7 +170,7 @@ def compute_knn(query_filename, query_count, sorted_data_filename, base_count, d
     batch_count = math.ceil(base_length / batch_size)
     assert (base_length % batch_size == 0) or k <= (base_length % batch_size), f"Cannot generate k of {k} with only {base_length} rows and batch_size of {batch_size}."
 
-    process_batches(base_dataset, base_length, query_dataset, query_length, batch_count, batch_size, k, split, query_column_names, base_column_names)
+    process_batches_alternate(base_dataset, base_length, query_dataset, query_length, batch_count, batch_size, k, split, query_column_names, base_column_names)
 
 
 def cleanup(*args):
@@ -172,39 +183,26 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(base_dataset, base_length, query_dataset, query_length, batch_count, batch_size, k, split, query_column_names, base_column_names):
-    for start in tqdm(range(0, batch_count)):
-        batch_offset = start * batch_size
-        batch_length = batch_size if start != batch_count - 1 else base_length - batch_offset
-
-        np_index = np.arange(batch_offset, batch_offset + batch_length)
-        dataset_batch = drop_columns(base_dataset.take(np_index), base_column_names)
-
-        df = cudf.DataFrame.from_arrow(dataset_batch)
+def process_batches_alternate(base_dataset: ds, base_length, query_dataset, query_length, batch_count, batch_size, k, split, query_column_names, base_column_names):
+    i = 0
+    for dataset_batch in tqdm(base_dataset.to_batches(batch_size=batch_size, columns=base_column_names)):
+        batch_offset = batch_size * i
+        i += i
+        df = cudf.DataFrame.from_arrow(pa.Table.from_batches([dataset_batch]))
         df_numeric = df.select_dtypes(['float32', 'float64'])
-
         cleanup(df)
-
         dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
-
         # Split the DataFrame into parts (floor division)
         # TODO: pull out this variable
         # split_factor = 50
         split_factor = 1
-        splits = split_factor * batch_count
-        rows_per_split = query_length // splits
-
+        #splits = split_factor * batch_count
+        #rows_per_split = query_length // splits
         distances = cudf.DataFrame()
         indices = cudf.DataFrame()
         if split:
-            for i in tqdm(range(splits)):
-                offset = i * rows_per_split
-                length = rows_per_split if i != splits - 1 else query_length - offset  # To handle the last chunk
-
-                np_index = np.arange(offset, offset + length)
-                query_batch = drop_columns(query_dataset.take(np_index), query_column_names)
-
-                df1 = cudf.DataFrame.from_arrow(query_batch)
+            for query_batch in query_dataset.to_batches(batch_size=batch_size, columns=query_column_names):
+                df1 = cudf.DataFrame.from_arrow(pa.Table.from_batches([query_batch]))
                 df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
                 cleanup(df1)
@@ -218,10 +216,10 @@ def process_batches(base_dataset, base_length, query_dataset, query_length, batc
                 # add batch_offset to indices
                 indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
 
-                #cosine_dist= cosine(dataset[775].get(),query[0].get())
-                #distance = 1 - dot_product(dataset[775],query[0])
-                #isClose = np.isclose(2*distance, distances1[0][0])
-                #print(isClose)
+                # cosine_dist= cosine(dataset[775].get(),query[0].get())
+                # distance = 1 - dot_product(dataset[775],query[0])
+                # isClose = np.isclose(2*distance, distances1[0][0])
+                # print(isClose)
 
                 distances = cudf.concat([distances, distances1], ignore_index=True)
                 indices = cudf.concat([indices, indices1], ignore_index=True)
@@ -230,14 +228,89 @@ def process_batches(base_dataset, base_length, query_dataset, query_length, batc
             indices.columns = indices.columns.astype(str)
         assert (len(distances) == query_length)
         assert (len(indices) == query_length)
-
         distances['RowNum'] = range(0, len(distances))
         indices['RowNum'] = range(0, len(indices))
+        stream_cudf_to_parquet(distances, 100000, f'distances{i}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'indices{i}.parquet')
+        cleanup(df_numeric, distances, indices, dataset, query, df_numeric1, distances1, indices1, dataset_batch,
+                query_batch)
 
-        stream_cudf_to_parquet(distances, 100000, f'distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'indices{start}.parquet')
 
-        cleanup(df_numeric, distances, indices, dataset)
+#for bach in base_dataset.(batch_size=100000):
+
+def process_batches(base_dataset, base_length, query_dataset, query_length, batch_count, batch_size, k, split, query_column_names, base_column_names):
+    for start in tqdm(range(0, batch_count)):
+        print("gonna process batch")
+        print(pa.total_allocated_bytes())
+        process_batch(base_column_names, base_dataset, base_length, batch_count, batch_size, k, query_column_names,
+                      query_dataset, query_length, split, start)
+        print(pa.total_allocated_bytes())
+        print("processed batch")
+
+
+
+def process_batch(base_column_names, base_dataset, base_length, batch_count, batch_size, k, query_column_names,
+                  query_dataset, query_length, split, start):
+    batch_offset = start * batch_size
+    batch_length = batch_size if start != batch_count - 1 else base_length - batch_offset
+    np_index = np.arange(batch_offset, batch_offset + batch_length)
+    dataset_batch = drop_columns(base_dataset.take(np_index), base_column_names)
+    df = cudf.DataFrame.from_arrow(dataset_batch)
+    df_numeric = df.select_dtypes(['float32', 'float64'])
+    cleanup(df)
+    dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
+    # Split the DataFrame into parts (floor division)
+    # TODO: pull out this variable
+    # split_factor = 50
+    split_factor = 1
+    splits = split_factor * batch_count
+    rows_per_split = query_length // splits
+    distances = cudf.DataFrame()
+    indices = cudf.DataFrame()
+    if split:
+        for i in tqdm(range(splits)):
+            offset = i * rows_per_split
+            length = rows_per_split if i != splits - 1 else query_length - offset  # To handle the last chunk
+
+            np_index = np.arange(offset, offset + length)
+            query_batch = drop_columns(query_dataset.take(np_index), query_column_names)
+
+            df1 = cudf.DataFrame.from_arrow(query_batch)
+            df_numeric1 = df1.select_dtypes(['float32', 'float64'])
+
+            cleanup(df1)
+            query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
+
+            assert (k <= len(dataset))
+
+            cupydistances1, cupyindices1 = knn(dataset, query, k)
+
+            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
+            # add batch_offset to indices
+            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+
+            # cosine_dist= cosine(dataset[775].get(),query[0].get())
+            # distance = 1 - dot_product(dataset[775],query[0])
+            # isClose = np.isclose(2*distance, distances1[0][0])
+            # print(isClose)
+
+            distances = cudf.concat([distances, distances1], ignore_index=True)
+            indices = cudf.concat([indices, indices1], ignore_index=True)
+
+        distances.columns = distances.columns.astype(str)
+        indices.columns = indices.columns.astype(str)
+    # assert (len(distances) == query_length)
+    # assert (len(indices) == query_length)
+    distances['RowNum'] = range(0, len(distances))
+    indices['RowNum'] = range(0, len(indices))
+    stream_cudf_to_parquet(distances, 100000, f'distances{start}.parquet')
+    stream_cudf_to_parquet(indices, 100000, f'indices{start}.parquet')
+    print("gonna cleanup")
+    print(pa.total_allocated_bytes())
+    cleanup(df_numeric, distances, indices, dataset, query, df_numeric1, distances1, indices1, dataset_batch,
+            query_batch)
+    print("did cleanup")
+    print(pa.total_allocated_bytes())
 
 
 if __name__ == "__main__":
