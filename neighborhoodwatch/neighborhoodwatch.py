@@ -1,4 +1,5 @@
 import argparse
+
 import neighborhoodwatch.cu_knn
 from neighborhoodwatch.generate_dataset import generate_query_dataset, generate_base_dataset
 from neighborhoodwatch.parquet_to_ivec_fvec import generate_files
@@ -26,9 +27,9 @@ def main():
     parser.add_argument('base_count', type=int)
     parser.add_argument('dimensions', type=int)
     parser.add_argument('-k', '--k', type=int, default=100)
+    parser.add_argument('-m', '--model_name', type=str, default='ada_002')
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
     parser.add_argument('--disable-memory-tuning', action='store_false', help='Disable memory tuning (useful for very small datasets)')
-
 
     args = parser.parse_args()
 
@@ -36,13 +37,13 @@ def main():
 
     rprint(Markdown("**Generating query dataset** "),'')
     section_time = time.time()
-    query_filename = generate_query_dataset(args.query_count)
+    query_filename = generate_query_dataset(args.query_count, args.model_name)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
     rprint(Markdown("**Generating base dataset** "),'')
     section_time = time.time()
-    base_filename = generate_base_dataset(query_filename, args.base_count)
+    base_filename = generate_base_dataset(query_filename, args.base_count, args.model_name)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
@@ -64,7 +65,7 @@ def main():
     rprint(Markdown("**Generating ivec's and fvec's** "), '')
     section_time = time.time()
     query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = neighborhoodwatch.parquet_to_ivec_fvec.generate_files('final_indices.parquet', base_filename, query_filename, 'final_distances.parquet', args.base_count,
-                                                          args.query_count, args.k, args.dimensions)
+                                                          args.query_count, args.k, args.dimensions, args.model_name)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 

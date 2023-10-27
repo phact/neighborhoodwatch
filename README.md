@@ -14,6 +14,9 @@ sudo dpkg -i cuda-keyring_1.1-1_all.deb
 sudo apt-get update
 sudo apt-get -y install cuda
 ```
+
+to generate local embeddings install cudnn https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html and nccl per https://docs.nvidia.com/deeplearning/nccl/install-guide/index.html#debian
+
 install poetry per https://python-poetry.org/docs/#installation
 
     curl -sSL https://install.python-poetry.org | python3 -
@@ -24,7 +27,11 @@ install python dependencies using poetry:
 
 run nw with poetry:
 
-    poetry run nw 'data/pages_ada_002_query_data_100k_test.parquet' 10000 'data/pages_ada_002_sorted.parquet' 100000 1536 -k 100
+    poetry run nw 10000 100000 1536 -k 100 --enable-memory-tuning
+
+or for local embeddings:
+
+    poetry run nw 10000 100000 384 -k 100 -m 'intfloat/multilingual-e5-small' --enable-memory-tuning
 
 
 usage:

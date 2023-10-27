@@ -68,12 +68,12 @@ def write_ivec_fvec_from_dataframe(filename, df, type_char, num_columns):
 
 
 # Generate query_vector.fvec file
-def generate_query_vectors_fvec(input_parquet, base_count, query_count, n):
+def generate_query_vectors_fvec(input_parquet, base_count, query_count, dimensions, model_prefix):
     table = pq.read_table(input_parquet)
     table = table.slice(0, query_count)
 
     column_names = []
-    for i in range(n):
+    for i in range(dimensions):
         column_names.append(f'embedding_{i}')
     columns_to_drop = list(set(table.schema.names) - set(column_names))
 
@@ -82,19 +82,18 @@ def generate_query_vectors_fvec(input_parquet, base_count, query_count, n):
             col_index = table.schema.get_field_index(col)
             table = table.remove_column(col_index)
     df = table.to_pandas()
-    output_fvec = f'ada_002_{base_count}_query_vectors_{query_count}.fvec'
-    write_ivec_fvec_from_dataframe(output_fvec, df, 'f', n)
+    output_fvec = f'{model_prefix}_{base_count}_query_vectors_{query_count}.fvec'
+    write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
 
 
 # Generate base_vectors.fvec file
-def generate_base_vectors_fvec(input_parquet, base_count, k):
+def generate_base_vectors_fvec(input_parquet, base_count, k, dimensions, model_prefix):
     table = pq.read_table(input_parquet)
     table = table.slice(0, base_count)
-    n = 1536
 
     column_names = []
-    for i in range(n):
+    for i in range(dimensions):
         column_names.append(f'embedding_{i}')
     columns_to_drop = list(set(table.schema.names) - set(column_names))
     for col in columns_to_drop:
@@ -102,30 +101,34 @@ def generate_base_vectors_fvec(input_parquet, base_count, k):
             col_index = table.schema.get_field_index(col)
             table = table.remove_column(col_index)
     df = table.to_pandas()
-    output_fvec = f'ada_002_{base_count}_base_vectors.fvec'
-    write_ivec_fvec_from_dataframe(output_fvec, df, 'f', k)
+    output_fvec = f'{model_prefix}_{base_count}_base_vectors.fvec'
+    write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
 
-def generate_distances_fvec(input_parquet, count, k):
+def generate_distances_fvec(input_parquet, count, k, model_prefix):
     df = read_parquet_to_dataframe(input_parquet)
-    output_fvec = f'ada_002_{count}_distances_count.fvec'
+    output_fvec = f'{model_prefix}_{count}_distances_count.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', k)
     return output_fvec
 
 
 # Generate indices.ivec file
-def generate_indices_ivec(input_parquet, base_count, query_count, k):
+def generate_indices_ivec(input_parquet, base_count, query_count, k, model_prefix):
     df = read_parquet_to_dataframe(input_parquet)
-    output_ivec = f'ada_002_{base_count}_indices_query_{query_count}.ivec'
+    output_ivec = f'{model_prefix}_{base_count}_indices_query_{query_count}.ivec'
     write_ivec_fvec_from_dataframe(output_ivec, df, 'i', k)
     return output_ivec
 
 
-def generate_files(indices_parquet, base_vectors_parquet, query_vectors_parquet, final_distances_parquet, base_count, query_count, k, n):
-    indices_ivec = generate_indices_ivec(indices_parquet, base_count, query_count, k)
-    query_vector_fvec = generate_query_vectors_fvec(query_vectors_parquet, base_count, query_count, n)
-    base_vector_fvec = generate_base_vectors_fvec(base_vectors_parquet, base_count, n)
-    distances_fvec = generate_distances_fvec(final_distances_parquet, query_count, k)
+def generate_files(indices_parquet, base_vectors_parquet, query_vectors_parquet, final_distances_parquet, base_count, query_count, k, dimensions, model_name):
+    if model_name:
+        model_prefix = model_name.replace("/", "_")
+    else:
+        model_prefix = "ada_002"
+    indices_ivec = generate_indices_ivec(indices_parquet, base_count, query_count, k, model_prefix)
+    query_vector_fvec = generate_query_vectors_fvec(query_vectors_parquet, base_count, query_count, dimensions, model_prefix)
+    base_vector_fvec = generate_base_vectors_fvec(base_vectors_parquet, base_count, k, dimensions, model_prefix)
+    distances_fvec = generate_distances_fvec(final_distances_parquet, query_count, k, model_prefix)
 
     rprint(Markdown("Generated files: "), '')
     # print counts

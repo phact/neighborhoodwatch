@@ -12,6 +12,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
+from sentence_transformers import SentenceTransformer
 
 BASE_DATASET = "wikipedia"
 BASE_CONFIG = "20220301.en"
@@ -54,6 +55,57 @@ def get_batch_embeddings_ada_002(text_list):
     return embeddings
 
 
+class EmbeddingGenerator:
+    def __init__(self, model_name='e5-v2-small'):
+        self.model_name = model_name
+        self.model = SentenceTransformer(self.model_name)
+
+    def generate_embedding(self, text):
+        # Ensure the text is a list of sentences
+        if isinstance(text, str):
+            text = [text]
+
+        # Generate embeddings
+        embeddings = self.model.encode(text)
+        return embeddings
+
+
+def get_batch_embeddings_local(text_list, generator):
+    embeddings = []
+    chunk_size = 1000
+    total_items = len(text_list)
+    chunks = math.ceil(total_items / chunk_size)
+
+    for i in tqdm(range(chunks)):
+        start = i * chunk_size
+        end = min(start + chunk_size, total_items)
+        process = text_list[start:end]
+        zero_vector = [0.0] * 1536
+
+        try:
+            if "e5" in generator.model_name:
+                process = ["query:"+ s for s in process]
+            response = generator.generate_embedding(process)
+        except Exception as e:
+            print(f"failed to get embeddings for {process}")
+            print(e)
+            # append zero vector when openai fails
+            for _ in process:
+                embeddings.append(zero_vector)
+            continue
+
+        for item in response:
+            #if len(item) != generator.model.get_sentence_embedding_dimension():
+            #    print("got a bad embedding from SentenceTransformer, skipping it:")
+            #    print(item)
+            #    print(f"for input {process}")
+            #else:
+            #    embeddings.append(item)
+            embeddings.append(item)
+
+    return embeddings
+
+
 def split_into_sentences(text):
     # if type(text) == pa.lib.StringScalar:
     #     text = text.as_py()
@@ -61,14 +113,21 @@ def split_into_sentences(text):
     return [sent.text.strip() for sent in doc.sents]
 
 
-def get_embeddings_from_map(text_map):
+def get_embeddings_from_map(text_map, generator):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
-    embedding_array = get_batch_embeddings_ada_002(flattened_sentences)
+    embedding_array = None
+    if generator is not None:
+        embedding_array = get_batch_embeddings_local(flattened_sentences, generator)
+    else:
+        embedding_array = get_batch_embeddings_ada_002(flattened_sentences)
     iterator = iter(embedding_array)
     return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map]
 
 
-def process_dataset(streamer, dataset, row_count, embedding_column, meta_array=[], embedding_array=[]):
+def process_dataset(streamer, dataset, row_count, embedding_column, model_name):
+    meta_array = []
+    embedding_array = []
+
     sentence_batch_size = 10000
     sentence_batch_size = min(sentence_batch_size, row_count)
     embedding_counter = 0
@@ -89,7 +148,12 @@ def process_dataset(streamer, dataset, row_count, embedding_column, meta_array=[
         if sentence_batch_counter >= sentence_batch_size or last_row:
             sentence_batch_counter = 0
 
-            embedding_tuple_list = get_embeddings_from_map(text_map)
+            embedding_tuple_list = None
+            if ((model_name is not None) and (model_name != "ada-002")):
+                generator = EmbeddingGenerator(model_name=model_name)
+                embedding_tuple_list = get_embeddings_from_map(text_map, generator)
+            else:
+                embedding_tuple_list = get_embeddings_from_map(text_map, None)
 
             #for embedding_tuple in tqdm(embedding_tuple_list):
             for embedding_tuple in embedding_tuple_list:
@@ -121,6 +185,8 @@ def process_dataset(streamer, dataset, row_count, embedding_column, meta_array=[
                     embedding_counter += 1
                     if embedding_counter >= row_count:
                         print(f"Total embeddings so far {embedding_counter} out of {row_count}")
+                        print(len(meta_array))
+                        print(len(meta_array[0]))
                         streamer.stream_to_parquet(meta_array, embedding_array)
                         return embedding_counter
             streamer.stream_to_parquet(meta_array, embedding_array)
@@ -163,10 +229,9 @@ def write_to_parquet(source, columns, meta_array, embedding_array):
 
 
 class ParquetStreamer:
-    def __init__(self, source, columns, row_count):
-        self.source = source
+    def __init__(self, filename, columns):
+        self.filename = filename
         self.columns = columns
-        self.filename = f'./{self.source}_data_{row_count}.parquet'
         self.writer = None
         print(f"Initiated streaming to file {self.filename}")
 
@@ -197,26 +262,31 @@ class ParquetStreamer:
             print(f"Finished streaming to {self.filename}")
 
 
-def generate_query_dataset(row_count):
+def generate_query_dataset(row_count, model_name=None):
     source = "query_vector"
-    filename = f'./{source}_data_{row_count}.parquet'
+    filename = f'./{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
+    if model_name is None:
+        filename = f'./ada_002_{source}_data_{row_count}.parquet'
     if os.path.exists(filename):
         print(f"file {filename} already exists")
         return filename
 
     full_dataset = load_dataset(QUERY_DATASET, cache_dir="./data")["train"]
-    streamer = ParquetStreamer(source, full_dataset.column_names, row_count)
-    processed_count = process_dataset(streamer, full_dataset, row_count, "question")
+    streamer = ParquetStreamer(filename, full_dataset.column_names)
+    processed_count = process_dataset(streamer, full_dataset, row_count, "question", model_name)
     streamer.close()
     assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
     return filename
 
 
-def generate_base_dataset(query_vector_filename, row_count):
+def generate_base_dataset(query_vector_filename, row_count, model_name):
     processed_count = 0
 
     source = "base_vector"
-    filename = f'./{source}_data_{row_count}.parquet'
+    filename = f'./{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
+    if model_name is None:
+        filename = f'./ada_002_{source}_data_{row_count}.parquet'
+
     if os.path.exists(filename):
         print(f"file {filename} already exists")
         return filename
@@ -225,7 +295,7 @@ def generate_base_dataset(query_vector_filename, row_count):
     query_titles = pc.unique(query_dataset.column("title")).to_pylist()
 
     full_dataset = load_dataset(BASE_DATASET, BASE_CONFIG, cache_dir="./data")["train"]
-    streamer = ParquetStreamer(source, full_dataset.column_names, row_count)
+    streamer = ParquetStreamer(filename, full_dataset.column_names)
 
     # TODO consider iterable dataset
     num_cores = multiprocessing.cpu_count()
@@ -242,7 +312,7 @@ def generate_base_dataset(query_vector_filename, row_count):
         print(f"no matching base title for query titles {query_titles}")
     else:
         print("processing dataset")
-        processed_count = process_dataset(streamer, filtered_dataset, row_count, "text")
+        processed_count = process_dataset(streamer, filtered_dataset, row_count, "text", model_name)
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     if row_count > processed_count:
@@ -258,7 +328,7 @@ def generate_base_dataset(query_vector_filename, row_count):
 
         print("processing dataset")
         #filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
-        processed_count += process_dataset(streamer, filtered_dataset, row_count - processed_count, "text")
+        processed_count += process_dataset(streamer, filtered_dataset, row_count - processed_count, "text", model_name)
         assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
 
     streamer.close()

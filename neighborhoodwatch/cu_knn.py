@@ -110,7 +110,7 @@ def get_embedding_count(table):
 
 def prep_table(filename, count, n):
     table = load_table(filename, 0, count)
-    assert get_embedding_count(table) == n
+    assert get_embedding_count(table) == n, f"Expected {n} embedding columns, got {get_embedding_count(table)} columns."
     assert len(table) == count, f"Expected {count} rows, got {len(table)} rows."
     column_names = ['text', 'document_id_idx']
     for i in range(n):
