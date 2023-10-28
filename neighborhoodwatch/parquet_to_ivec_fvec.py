@@ -105,9 +105,9 @@ def generate_base_vectors_fvec(input_parquet, base_count, k, dimensions, model_p
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
 
-def generate_distances_fvec(input_parquet, count, k, model_prefix):
+def generate_distances_fvec(input_parquet,base_count, count, k, model_prefix):
     df = read_parquet_to_dataframe(input_parquet)
-    output_fvec = f'{model_prefix}_{count}_distances_count.fvec'
+    output_fvec = f'{model_prefix}_{base_count}_distances_{count}.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', k)
     return output_fvec
 
@@ -128,7 +128,7 @@ def generate_files(indices_parquet, base_vectors_parquet, query_vectors_parquet,
     indices_ivec = generate_indices_ivec(indices_parquet, base_count, query_count, k, model_prefix)
     query_vector_fvec = generate_query_vectors_fvec(query_vectors_parquet, base_count, query_count, dimensions, model_prefix)
     base_vector_fvec = generate_base_vectors_fvec(base_vectors_parquet, base_count, k, dimensions, model_prefix)
-    distances_fvec = generate_distances_fvec(final_distances_parquet, query_count, k, model_prefix)
+    distances_fvec = generate_distances_fvec(final_distances_parquet, base_count, query_count, k, model_prefix)
 
     rprint(Markdown("Generated files: "), '')
     # print counts

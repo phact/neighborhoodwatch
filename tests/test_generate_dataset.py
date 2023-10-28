@@ -8,6 +8,8 @@ from neighborhoodwatch.generate_dataset import generate_query_dataset
 def test_generate_query_dataset():
     generate_query_dataset(1000)
 
+def test_generate_query_dataset_gecko():
+    generate_query_dataset(1000, 'textembedding-gecko')
 
 def test_generate_query_dataset_e5():
     generate_query_dataset(1000, 'intfloat/multilingual-e5-small')

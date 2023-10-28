@@ -118,7 +118,7 @@ def prep_table(filename, count, n):
     return drop_columns(table, column_names)
 
 
-def compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions=1536, mem_tune=True, k=100,
+def compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions, mem_tune=True, k=100,
                 initial_batch_size=100000, max_memory_threshold=0.1, split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 

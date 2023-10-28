@@ -13,6 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
 from sentence_transformers import SentenceTransformer
+from vertexai.preview.language_models import TextEmbeddingModel
 
 BASE_DATASET = "wikipedia"
 BASE_CONFIG = "20220301.en"
@@ -21,6 +22,7 @@ QUERY_DATASET = "squad"
 
 nlp = spacy.blank("en")
 nlp.add_pipe("sentencizer")
+
 
 def get_batch_embeddings_ada_002(text_list):
     embeddings = []
@@ -55,24 +57,9 @@ def get_batch_embeddings_ada_002(text_list):
     return embeddings
 
 
-class EmbeddingGenerator:
-    def __init__(self, model_name='e5-v2-small'):
-        self.model_name = model_name
-        self.model = SentenceTransformer(self.model_name)
-
-    def generate_embedding(self, text):
-        # Ensure the text is a list of sentences
-        if isinstance(text, str):
-            text = [text]
-
-        # Generate embeddings
-        embeddings = self.model.encode(text)
-        return embeddings
-
-
-def get_batch_embeddings_local(text_list, generator):
+def get_batch_embeddings_from_generator(text_list, generator):
     embeddings = []
-    chunk_size = 1000
+    chunk_size = generator.chunk_size
     total_items = len(text_list)
     chunks = math.ceil(total_items / chunk_size)
 
@@ -80,7 +67,7 @@ def get_batch_embeddings_local(text_list, generator):
         start = i * chunk_size
         end = min(start + chunk_size, total_items)
         process = text_list[start:end]
-        zero_vector = [0.0] * 1536
+        zero_vector = [0.0] * generator.dimensions
 
         try:
             if "e5" in generator.model_name:
@@ -106,6 +93,44 @@ def get_batch_embeddings_local(text_list, generator):
     return embeddings
 
 
+class VertexAIEmbeddingGenerator:
+    def __init__(self, model_name='textembedding-gecko'):
+        self.model_name = model_name
+        self.client = TextEmbeddingModel.from_pretrained(model_name)
+        self.chunk_size = 250
+        self.dimensions = 768
+
+    def generate_embedding(self, text):
+        # Ensure the text is a list of sentences
+        if isinstance(text, str):
+            text = [text]
+
+        # Generate embeddings
+        embeddings = self.client.get_embeddings(text)
+        embeddings = [embedding.values for embedding in embeddings]
+        return embeddings
+
+
+
+class EmbeddingGenerator:
+    def __init__(self, model_name='e5-v2-small'):
+        self.model_name = model_name
+        self.model = SentenceTransformer(self.model_name)
+        self.chunk_size = 1000
+        self.dimensions = self.model.get_sentence_embedding_dimension()
+
+    def generate_embedding(self, text):
+        # Ensure the text is a list of sentences
+        if isinstance(text, str):
+            text = [text]
+
+        # Generate embeddings
+        embeddings = self.model.encode(text)
+        return embeddings
+
+
+
+
 def split_into_sentences(text):
     # if type(text) == pa.lib.StringScalar:
     #     text = text.as_py()
@@ -117,7 +142,7 @@ def get_embeddings_from_map(text_map, generator):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
     embedding_array = None
     if generator is not None:
-        embedding_array = get_batch_embeddings_local(flattened_sentences, generator)
+        embedding_array = get_batch_embeddings_from_generator(flattened_sentences, generator)
     else:
         embedding_array = get_batch_embeddings_ada_002(flattened_sentences)
     iterator = iter(embedding_array)
@@ -150,7 +175,12 @@ def process_dataset(streamer, dataset, row_count, embedding_column, model_name):
 
             embedding_tuple_list = None
             if ((model_name is not None) and (model_name != "ada-002")):
-                generator = EmbeddingGenerator(model_name=model_name)
+                generator = None
+                if model_name == 'textembedding-gecko':
+                    generator = VertexAIEmbeddingGenerator(model_name=model_name)
+                else:
+                    generator = EmbeddingGenerator(model_name=model_name)
+
                 embedding_tuple_list = get_embeddings_from_map(text_map, generator)
             else:
                 embedding_tuple_list = get_embeddings_from_map(text_map, None)
