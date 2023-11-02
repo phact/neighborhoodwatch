@@ -1,4 +1,6 @@
 import sys
+
+import h5py
 import numpy as np
 import pyarrow.parquet as pq
 from tqdm import tqdm
@@ -6,6 +8,12 @@ from rich import print as rprint
 from rich.markdown import Markdown
 import struct
 import os
+
+
+##
+# Convert the Parquet file into the specified target format.
+# - 'ivec', 'fvec', and 'hdf5' format are currently supported
+##
 
 
 # Reading Parquet into a DataFrame
@@ -68,7 +76,7 @@ def write_ivec_fvec_from_dataframe(filename, df, type_char, num_columns):
 
 
 # Generate query_vector.fvec file
-def read_and_extract(input_parquet, dimensions):
+def read_and_extract(input_parquet, base_count, dimensions):
     table = pq.read_table(input_parquet)
     table = table.slice(0, base_count)
 
@@ -86,7 +94,7 @@ def read_and_extract(input_parquet, dimensions):
 
 
 def generate_query_vectors_fvec(input_parquet, base_count, query_count, dimensions, model_prefix):
-    df = read_and_extract(input_parquet, dimensions)
+    df = read_and_extract(input_parquet, base_count, dimensions)
     output_fvec = f'{model_prefix}_{base_count}_query_vectors_{query_count}.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
@@ -94,7 +102,7 @@ def generate_query_vectors_fvec(input_parquet, base_count, query_count, dimensio
 
 # Generate base_vectors.fvec file
 def generate_base_vectors_fvec(input_parquet, base_count, k, dimensions, model_prefix):
-    df = read_and_extract(input_parquet, dimensions)
+    df = read_and_extract(input_parquet, base_count, dimensions)
     output_fvec = f'{model_prefix}_{base_count}_base_vectors.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
@@ -112,7 +120,6 @@ def generate_indices_ivec(input_parquet, base_count, query_count, k, model_prefi
     output_ivec = f'{model_prefix}_{base_count}_indices_query_{query_count}.ivec'
     write_ivec_fvec_from_dataframe(output_ivec, df, 'i', k)
     return output_ivec
-
 
 
 def generate_hdf5_file(indices_parquet, base_vectors_parquet, query_vectors_parquet, final_distances_parquet, base_count, query_count, k, dimensions, model_name):
@@ -134,7 +141,6 @@ def generate_hdf5_file(indices_parquet, base_vectors_parquet, query_vectors_parq
 
     df = read_parquet_to_dataframe(indices_parquet)
     write_hdf5(df, filename, 'neighbors')
-
 
 
 def write_hdf5(df, filename, datasetname):
@@ -192,7 +198,7 @@ def dot_product(A, B):
 
 if __name__ == "__main__":
     if len(sys.argv) != 5:
-        print("Usage: python parquet_to_ivec_fvec.py indices.parquet base_vectors.parquet base_count query_count")
+        print("Usage: python parquet_to_dest_format.py indices.parquet base_vectors.parquet base_count query_count")
         sys.exit(1)
     indices_parquet = sys.argv[1]
     base_vectors_parquet = sys.argv[2]
