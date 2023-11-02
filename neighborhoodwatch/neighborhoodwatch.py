@@ -23,11 +23,11 @@ def main():
 
     parser = argparse.ArgumentParser(
         description='nw (neighborhood watch) uses GPU acceleration to generate ground truth KNN datasets')
-    parser.add_argument('query_count', type=int)
-    parser.add_argument('base_count', type=int)
-    parser.add_argument('dimensions', type=int)
-    parser.add_argument('-k', '--k', type=int, default=100)
-    parser.add_argument('-m', '--model_name', type=str, default='ada_002')
+    parser.add_argument('query_count', type=int, help="number of query vectors to generate")
+    parser.add_argument('base_count', type=int, help="number of base vectors to generate")
+    parser.add_argument('dimensions', type=int, help="number of dimensions for the embedding model")
+    parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
+    parser.add_argument('-m', '--model_name', type=str, default='ada_002', help='model name to use for generating embeddings, i.e. ada_002, textembedding-gecko, or intfloat/e5-large-v2')
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
     parser.add_argument('--disable-memory-tuning', action='store_false', help='Disable memory tuning (useful for very small datasets)')
 
