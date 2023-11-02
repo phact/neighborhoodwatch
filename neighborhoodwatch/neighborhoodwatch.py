@@ -17,12 +17,22 @@ def cleanup_partial_parquet():
             os.remove(filename)
 
 
+class KeepLineBreaksFormatter(argparse.RawTextHelpFormatter):
+    pass
+
 def main():
 
     start_time = time.time()
 
     parser = argparse.ArgumentParser(
-        description='nw (neighborhood watch) uses GPU acceleration to generate ground truth KNN datasets')
+        description="""nw (neighborhood watch) uses GPU acceleration to generate ground truth KNN datasets""",
+        epilog="""
+Some example commands:\n
+    nw 10000 10000 1024 -k 100 -m 'intfloat/e5-large-v2' --disable-memory-tuning
+    nw 10000 10000 768 -k 100 -m 'textembedding-gecko' --disable-memory-tuning
+    nw 10000 10000 384 -k 100 -m 'intfloat/e5-small-v2' --disable-memory-tuning
+    nw 10000 10000 768 -k 100 -m 'intfloat/e5-base-v2' --disable-memory-tuning
+        """, formatter_class=KeepLineBreaksFormatter)
     parser.add_argument('query_count', type=int, help="number of query vectors to generate")
     parser.add_argument('base_count', type=int, help="number of base vectors to generate")
     parser.add_argument('dimensions', type=int, help="number of dimensions for the embedding model")
