@@ -68,27 +68,7 @@ def write_ivec_fvec_from_dataframe(filename, df, type_char, num_columns):
 
 
 # Generate query_vector.fvec file
-def generate_query_vectors_fvec(input_parquet, base_count, query_count, dimensions, model_prefix):
-    table = pq.read_table(input_parquet)
-    table = table.slice(0, query_count)
-
-    column_names = []
-    for i in range(dimensions):
-        column_names.append(f'embedding_{i}')
-    columns_to_drop = list(set(table.schema.names) - set(column_names))
-
-    for col in columns_to_drop:
-        if col in table.schema.names:  # Check if the column exists in the table
-            col_index = table.schema.get_field_index(col)
-            table = table.remove_column(col_index)
-    df = table.to_pandas()
-    output_fvec = f'{model_prefix}_{base_count}_query_vectors_{query_count}.fvec'
-    write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
-    return output_fvec
-
-
-# Generate base_vectors.fvec file
-def generate_base_vectors_fvec(input_parquet, base_count, k, dimensions, model_prefix):
+def read_and_extract(input_parquet, dimensions):
     table = pq.read_table(input_parquet)
     table = table.slice(0, base_count)
 
@@ -101,6 +81,20 @@ def generate_base_vectors_fvec(input_parquet, base_count, k, dimensions, model_p
             col_index = table.schema.get_field_index(col)
             table = table.remove_column(col_index)
     df = table.to_pandas()
+    return df
+
+
+
+def generate_query_vectors_fvec(input_parquet, base_count, query_count, dimensions, model_prefix):
+    df = read_and_extract(input_parquet, dimensions)
+    output_fvec = f'{model_prefix}_{base_count}_query_vectors_{query_count}.fvec'
+    write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
+    return output_fvec
+
+
+# Generate base_vectors.fvec file
+def generate_base_vectors_fvec(input_parquet, base_count, k, dimensions, model_prefix):
+    df = read_and_extract(input_parquet, dimensions)
     output_fvec = f'{model_prefix}_{base_count}_base_vectors.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
@@ -118,6 +112,38 @@ def generate_indices_ivec(input_parquet, base_count, query_count, k, model_prefi
     output_ivec = f'{model_prefix}_{base_count}_indices_query_{query_count}.ivec'
     write_ivec_fvec_from_dataframe(output_ivec, df, 'i', k)
     return output_ivec
+
+
+
+def generate_hdf5_file(indices_parquet, base_vectors_parquet, query_vectors_parquet, final_distances_parquet, base_count, query_count, k, dimensions, model_name):
+    if model_name:
+        model_prefix = model_name.replace("/", "_")
+    else:
+        model_prefix = "ada_002"
+
+    filename = f'{model_prefix}_base_{base_count}_query_{query_count}.hdf5'
+
+    df = read_and_extract(base_vectors_parquet, dimensions)
+    write_hdf5(df, filename, 'train')
+
+    df = read_and_extract(query_vectors_parquet, dimensions)
+    write_hdf5(df, filename, 'test')
+
+    df = read_parquet_to_dataframe(final_distances_parquet)
+    write_hdf5(df, filename, 'distances')
+
+    df = read_parquet_to_dataframe(indices_parquet)
+    write_hdf5(df, filename, 'neighbors')
+
+
+
+def write_hdf5(df, filename, datasetname):
+    data = df.values
+    with h5py.File(filename, 'a') as f:
+        if datasetname in f:
+            print(f"Dataset '{datasetname}' already exists in file '{filename}'")
+        else:
+            f.create_dataset(datasetname, data=data)
 
 
 def generate_files(indices_parquet, base_vectors_parquet, query_vectors_parquet, final_distances_parquet, base_count, query_count, k, dimensions, model_name):
