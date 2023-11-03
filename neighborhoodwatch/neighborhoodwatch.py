@@ -22,7 +22,6 @@ class KeepLineBreaksFormatter(argparse.RawTextHelpFormatter):
 
 
 def main():
-
     start_time = time.time()
 
     parser = argparse.ArgumentParser(
@@ -34,11 +33,11 @@ Some example commands:\n
     nw 10000 10000 384 -k 100 -m 'intfloat/e5-small-v2' --disable-memory-tuning
     nw 10000 10000 768 -k 100 -m 'intfloat/e5-base-v2' --disable-memory-tuning
         """, formatter_class=KeepLineBreaksFormatter)
-    parser.add_argument('query_count', type=int)
-    parser.add_argument('base_count', type=int)
-    parser.add_argument('dimensions', type=int)
-    parser.add_argument('-k', '--k', type=int, default=100)
-    parser.add_argument('-m', '--model_name', type=str, default='ada_002')
+    parser.add_argument('query_count', type=int, help="number of query vectors to generate")
+    parser.add_argument('base_count', type=int, help="number of base vectors to generate")
+    parser.add_argument('dimensions', type=int, help="number of dimensions for the embedding model")
+    parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
+    parser.add_argument('-m', '--model_name', type=str, default='ada-002', help='model name to use for generating embeddings, i.e. ada-002, textembedding-gecko, or intfloat/e5-large-v2')
     parser.add_argument('-d', '--data_dir', type=str, default='knn_dataset', help='Directory to store the generated data (default: knn_dataset)')
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
     parser.add_argument('--disable-memory-tuning', action='store_false', help='Disable memory tuning (useful for very small datasets)')
