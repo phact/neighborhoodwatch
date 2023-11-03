@@ -92,48 +92,86 @@ def read_and_extract(input_parquet, base_count, dimensions):
     return df
 
 
-
-def generate_query_vectors_fvec(input_parquet, base_count, query_count, dimensions, model_prefix):
+def generate_query_vectors_fvec(data_dir, input_parquet, base_count, query_count, dimensions, model_prefix):
     df = read_and_extract(input_parquet, base_count, dimensions)
-    output_fvec = f'{model_prefix}_{base_count}_query_vectors_{query_count}.fvec'
+    output_fvec = f'{data_dir}/{model_prefix}_{base_count}_query_vectors_{query_count}.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
 
 
 # Generate base_vectors.fvec file
-def generate_base_vectors_fvec(input_parquet, base_count, k, dimensions, model_prefix):
+def generate_base_vectors_fvec(data_dir, input_parquet, base_count, k, dimensions, model_prefix):
     df = read_and_extract(input_parquet, base_count, dimensions)
-    output_fvec = f'{model_prefix}_{base_count}_base_vectors.fvec'
+    output_fvec = f'{data_dir}/{model_prefix}_{base_count}_base_vectors.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', dimensions)
     return output_fvec
 
-def generate_distances_fvec(input_parquet,base_count, count, k, model_prefix):
+
+def generate_distances_fvec(data_dir, input_parquet,base_count, count, k, model_prefix):
     df = read_parquet_to_dataframe(input_parquet)
-    output_fvec = f'{model_prefix}_{base_count}_distances_{count}.fvec'
+    output_fvec = f'{data_dir}/{model_prefix}_{base_count}_distances_{count}.fvec'
     write_ivec_fvec_from_dataframe(output_fvec, df, 'f', k)
     return output_fvec
 
 
 # Generate indices.ivec file
-def generate_indices_ivec(input_parquet, base_count, query_count, k, model_prefix):
+def generate_indices_ivec(data_dir, input_parquet, base_count, query_count, k, model_prefix):
     df = read_parquet_to_dataframe(input_parquet)
-    output_ivec = f'{model_prefix}_{base_count}_indices_query_{query_count}.ivec'
+    output_ivec = f'{data_dir}/{model_prefix}_{base_count}_indices_query_{query_count}.ivec'
     write_ivec_fvec_from_dataframe(output_ivec, df, 'i', k)
     return output_ivec
 
 
-def generate_hdf5_file(indices_parquet, base_vectors_parquet, query_vectors_parquet, final_distances_parquet, base_count, query_count, k, dimensions, model_name):
+def generate_ivec_fvec_files(data_dir,
+                             indices_parquet, 
+                             base_vectors_parquet, 
+                             query_vectors_parquet, 
+                             final_distances_parquet, 
+                             base_count, 
+                             query_count, 
+                             k, 
+                             dimensions, 
+                             model_name):
+    if model_name:
+        model_prefix = model_name.replace("/", "_")
+    else:
+        model_prefix = "ada_002"
+    indices_ivec = generate_indices_ivec(data_dir, indices_parquet, base_count, query_count, k, model_prefix)
+    query_vector_fvec = generate_query_vectors_fvec(data_dir, query_vectors_parquet, base_count, query_count, dimensions, model_prefix)
+    base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, k, dimensions, model_prefix)
+    distances_fvec = generate_distances_fvec(data_dir, final_distances_parquet, base_count, query_count, k, model_prefix)
+
+    rprint(Markdown("Generated files: "), '')
+    # print counts
+    rprint(Markdown(f"*`{indices_ivec}` - indices count*: `{count_vectors(indices_ivec)}` k*: `{len(get_first_vector(indices_ivec))}`"))
+    rprint(Markdown(f"*`{query_vector_fvec}` - query vector count*: `{count_vectors(query_vector_fvec)}` dimensions*: `{len(get_first_vector(query_vector_fvec))}`"))
+    rprint(Markdown(f"*`{base_vector_fvec}` - base vector count*: `{count_vectors(base_vector_fvec)}` dimensions*: `{len(get_first_vector(base_vector_fvec))}`"))
+    rprint(Markdown(f"*`{distances_fvec}` - distances count*: `{count_vectors(distances_fvec)}` k*: `{len(get_first_vector(distances_fvec))}`"))
+
+    return query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec
+
+
+def generate_hdf5_file(data_dir,
+                       indices_parquet, 
+                       base_vectors_parquet, 
+                       query_vectors_parquet, 
+                       final_distances_parquet, 
+                       base_count, 
+                       query_count, 
+                       k, 
+                       dimensions, 
+                       model_name):
     if model_name:
         model_prefix = model_name.replace("/", "_")
     else:
         model_prefix = "ada_002"
 
-    filename = f'{model_prefix}_base_{base_count}_query_{query_count}.hdf5'
+    filename = f'{data_dir}/{model_prefix}_base_{base_count}_query_{query_count}.hdf5'
 
-    df = read_and_extract(base_vectors_parquet, dimensions)
+    df = read_and_extract(base_vectors_parquet, base_count, dimensions)
     write_hdf5(df, filename, 'train')
 
-    df = read_and_extract(query_vectors_parquet, dimensions)
+    df = read_and_extract(query_vectors_parquet, base_count, dimensions)
     write_hdf5(df, filename, 'test')
 
     df = read_parquet_to_dataframe(final_distances_parquet)
@@ -152,27 +190,7 @@ def write_hdf5(df, filename, datasetname):
             f.create_dataset(datasetname, data=data)
 
 
-def generate_files(indices_parquet, base_vectors_parquet, query_vectors_parquet, final_distances_parquet, base_count, query_count, k, dimensions, model_name):
-    if model_name:
-        model_prefix = model_name.replace("/", "_")
-    else:
-        model_prefix = "ada_002"
-    indices_ivec = generate_indices_ivec(indices_parquet, base_count, query_count, k, model_prefix)
-    query_vector_fvec = generate_query_vectors_fvec(query_vectors_parquet, base_count, query_count, dimensions, model_prefix)
-    base_vector_fvec = generate_base_vectors_fvec(base_vectors_parquet, base_count, k, dimensions, model_prefix)
-    distances_fvec = generate_distances_fvec(final_distances_parquet, base_count, query_count, k, model_prefix)
-
-    rprint(Markdown("Generated files: "), '')
-    # print counts
-    rprint(Markdown(f"*`{indices_ivec}` - indices count*: `{count_vectors(indices_ivec)}` k*: `{len(get_first_vector(indices_ivec))}`"))
-    rprint(Markdown(f"*`{query_vector_fvec}` - query vector count*: `{count_vectors(query_vector_fvec)}` dimensions*: `{len(get_first_vector(query_vector_fvec))}`"))
-    rprint(Markdown(f"*`{base_vector_fvec}` - base vector count*: `{count_vectors(base_vector_fvec)}` dimensions*: `{len(get_first_vector(base_vector_fvec))}`"))
-    rprint(Markdown(f"*`{distances_fvec}` - distances count*: `{count_vectors(distances_fvec)}` k*: `{len(get_first_vector(distances_fvec))}`"))
-
-    return query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec
-
 def validate_files(query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec):
-
     for n in range(count_vectors(query_vector_fvec)):
         nth_query_vector = get_nth_vector(query_vector_fvec, n)
         first_indexes = get_nth_vector(indices_ivec, n)

@@ -292,30 +292,33 @@ class ParquetStreamer:
             print(f"Finished streaming to {self.filename}")
 
 
-def generate_query_dataset(row_count, model_name=None):
+def generate_query_dataset(data_dir, row_count, model_name=None):
     source = "query_vector"
-    filename = f'./{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
+    filename = f'{data_dir}/{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
+
     if model_name is None:
-        filename = f'./ada_002_{source}_data_{row_count}.parquet'
+        filename = f'{data_dir}/ada_002_{source}_data_{row_count}.parquet'
+
     if os.path.exists(filename):
         print(f"file {filename} already exists")
         return filename
 
-    full_dataset = load_dataset(QUERY_DATASET, cache_dir="./data")["train"]
+    full_dataset = load_dataset(QUERY_DATASET, cache_dir=".cache")["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
     processed_count = process_dataset(streamer, full_dataset, row_count, "question", model_name)
     streamer.close()
     assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
+
     return filename
 
 
-def generate_base_dataset(query_vector_filename, row_count, model_name):
+def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name):
     processed_count = 0
 
     source = "base_vector"
-    filename = f'./{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
+    filename = f'{data_dir}/{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
     if model_name is None:
-        filename = f'./ada_002_{source}_data_{row_count}.parquet'
+        filename = f'{data_dir}/ada_002_{source}_data_{row_count}.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -324,7 +327,8 @@ def generate_base_dataset(query_vector_filename, row_count, model_name):
     query_dataset = pq.read_table(query_vector_filename)
     query_titles = pc.unique(query_dataset.column("title")).to_pylist()
 
-    full_dataset = load_dataset(BASE_DATASET, BASE_CONFIG, cache_dir="./data")["train"]
+    # TODO: for a large dataset, it is recommended to use a remote runner like Dataflow or Spark
+    full_dataset = load_dataset(BASE_DATASET, BASE_CONFIG, cache_dir=".cache", beam_runner='DirectRunner')["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
 
     # TODO consider iterable dataset
