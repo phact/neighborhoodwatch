@@ -118,7 +118,7 @@ def prep_table(filename, count, n):
     return drop_columns(table, column_names)
 
 
-def compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions, mem_tune=True, k=100,
+def compute_knn(data_dir, query_filename, query_count, sorted_data_filename, base_count, dimensions, mem_tune=True, k=100,
                 initial_batch_size=100000, max_memory_threshold=0.1, split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
@@ -135,7 +135,7 @@ def compute_knn(query_filename, query_count, sorted_data_filename, base_count, d
     batch_count = math.ceil(len(table) / batch_size)
     assert ((len(table) % batch_size == 0) or k <= (len(table) % batch_size)), f"Cannot generate k of {k} with only {len(table)} rows and batch_size of {batch_size}."
 
-    process_batches(table, query_table, batch_count, batch_size, k, split)
+    process_batches(data_dir, table, query_table, batch_count, batch_size, k, split)
 
 
 def cleanup(*args):
@@ -148,7 +148,7 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(table, query_table, batch_count, batch_size, k, split):
+def process_batches(data_dir, table, query_table, batch_count, batch_size, k, split):
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(table) - batch_offset
@@ -204,8 +204,8 @@ def process_batches(table, query_table, batch_count, batch_size, k, split):
         distances['RowNum'] = range(0, len(distances))
         indices['RowNum'] = range(0, len(indices))
 
-        stream_cudf_to_parquet(distances, 100000, f'distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'indices{start}.parquet')
+        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/distances{start}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/indices{start}.parquet')
 
         cleanup(df_numeric, distances, indices, dataset)
 

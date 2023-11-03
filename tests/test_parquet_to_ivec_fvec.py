@@ -3,7 +3,7 @@ import os
 import numpy as np
 import pandas as pd
 import pytest
-from neighborhoodwatch.parquet_to_ivec_fvec import generate_query_vectors_fvec, generate_indices_ivec, \
+from neighborhoodwatch.parquet_to_format import generate_query_vectors_fvec, generate_indices_ivec, \
     generate_base_vectors_fvec, generate_distances_fvec, count_vectors, get_nth_vector, dot_product
 import pyarrow.parquet as pq
 

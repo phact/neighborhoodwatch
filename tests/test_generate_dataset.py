@@ -13,6 +13,7 @@ def test_generate_query_dataset_gecko():
 
 def test_generate_query_dataset_e5():
     generate_query_dataset(1000, 'intfloat/multilingual-e5-small')
+
 def test_generate_base_dataset():
     generate_base_dataset('query_vector_data_1000.parquet',10000)
 
