@@ -80,7 +80,7 @@ echo "== Install NCCL library 2.19.3                                  =="
 echo "=================================================================="
 echo
 echo "=> Please make sure you download the NCCL library package file (.deb) from the following"
-echo "   login-protected web page: https://developer.nvidia.com/rdp/cudnn-download"
+echo "   login-protected web page: https://developer.nvidia.com/nccl/nccl-download"
 echo
 if [[ ! -f nccl-local-repo-ubuntu2004-2.19.3-cuda12.3_1.0-1_amd64.deb ]]; then
   echo "Can't find the NCCL installation package file!"
