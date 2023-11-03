@@ -17,12 +17,23 @@ def cleanup_partial_parquet():
             os.remove(filename)
 
 
+class KeepLineBreaksFormatter(argparse.RawTextHelpFormatter):
+    pass
+
+
 def main():
 
     start_time = time.time()
 
     parser = argparse.ArgumentParser(
-        description='nw (neighborhood watch) uses GPU acceleration to generate ground truth KNN datasets')
+        description="""nw (neighborhood watch) uses GPU acceleration to generate ground truth KNN datasets""",
+        epilog="""
+Some example commands:\n
+    nw 10000 10000 1024 -k 100 -m 'intfloat/e5-large-v2' --disable-memory-tuning
+    nw 10000 10000 768 -k 100 -m 'textembedding-gecko' --disable-memory-tuning
+    nw 10000 10000 384 -k 100 -m 'intfloat/e5-small-v2' --disable-memory-tuning
+    nw 10000 10000 768 -k 100 -m 'intfloat/e5-base-v2' --disable-memory-tuning
+        """, formatter_class=KeepLineBreaksFormatter)
     parser.add_argument('query_count', type=int)
     parser.add_argument('base_count', type=int)
     parser.add_argument('dimensions', type=int)
@@ -61,14 +72,14 @@ def main():
 
     rprint(Markdown("**Computing knn** "),'')
     section_time = time.time()
-    neighborhoodwatch.cu_knn.compute_knn(query_filename, args.query_count, base_filename, args.base_count,
+    neighborhoodwatch.cu_knn.compute_knn(args.data_dir, query_filename, args.query_count, base_filename, args.base_count,
                                          args.dimensions, args.enable_memory_tuning, args.k)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
     rprint(Markdown("**Merging indices and distances** "),'')
     section_time = time.time()
-    neighborhoodwatch.merge.merge_indices_and_distances()
+    neighborhoodwatch.merge.merge_indices_and_distances(args.data_dir)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
