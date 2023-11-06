@@ -12,8 +12,12 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
+
 from sentence_transformers import SentenceTransformer
 from vertexai.preview.language_models import TextEmbeddingModel
+
+from neighborhoodwatch.parquet_to_format import get_full_filename
+
 
 BASE_DATASET = "wikipedia"
 BASE_CONFIG = "20220301.en"
@@ -127,8 +131,6 @@ class EmbeddingGenerator:
         # Generate embeddings
         embeddings = self.model.encode(text)
         return embeddings
-
-
 
 
 def split_into_sentences(text):
@@ -324,7 +326,7 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
         print(f"file {filename} already exists")
         return filename
 
-    query_dataset = pq.read_table(query_vector_filename)
+    query_dataset = pq.read_table(get_full_filename(data_dir, query_vector_filename))
     query_titles = pc.unique(query_dataset.column("title")).to_pylist()
 
     # TODO: for a large dataset, it is recommended to use a remote runner like Dataflow or Spark
@@ -366,4 +368,5 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
         assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
 
     streamer.close()
+
     return filename

@@ -7,10 +7,13 @@ from tqdm import tqdm
 import pandas as pd
 import gc
 import math
+import numpy as np
 from pylibraft.neighbors.brute_force import knn
 import rmm
 from rich import print as rprint
 from rich.markdown import Markdown
+
+from neighborhoodwatch.parquet_to_format import get_full_filename, get_model_prefix
 
 
 def stream_cudf_to_parquet(df, chunk_size, filename):
@@ -89,8 +92,8 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
     return batch_size
 
 
-def load_table(filename, start, end):
-    return pq.read_table(filename).slice(start, end)
+def load_table(data_dir, filename, start, end):
+    return pq.read_table(get_full_filename(data_dir,filename)).slice(start, end)
 
 
 def drop_columns(table, keep_columns):
@@ -108,8 +111,8 @@ def get_embedding_count(table):
     return len(matching_columns)
 
 
-def prep_table(filename, count, n):
-    table = load_table(filename, 0, count)
+def prep_table(data_dir, filename, count, n):
+    table = load_table(data_dir, filename, 0, count)
     assert get_embedding_count(table) == n, f"Expected {n} embedding columns, got {get_embedding_count(table)} columns."
     assert len(table) == count, f"Expected {count} rows, got {len(table)} rows."
     column_names = ['text', 'document_id_idx']
@@ -118,16 +121,18 @@ def prep_table(filename, count, n):
     return drop_columns(table, column_names)
 
 
-def compute_knn(data_dir, query_filename, query_count, sorted_data_filename, base_count, dimensions, mem_tune=True, k=100,
+def compute_knn(data_dir, model_name, query_filename, query_count, sorted_data_filename, base_count, dimensions, mem_tune=True, k=100,
                 initial_batch_size=100000, max_memory_threshold=0.1, split=True):
+    model_prefix = get_model_prefix(model_name)
+
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     batch_size = initial_batch_size
     # batch_size = 543680
 
     n = dimensions
-    query_table = prep_table(query_filename, query_count, n)
-    table = prep_table(sorted_data_filename, base_count, n)
+    query_table = prep_table(data_dir, query_filename, query_count, n)
+    table = prep_table(data_dir, sorted_data_filename, base_count, n)
 
     if mem_tune:
         batch_size = tune_memory(table, batch_size, max_memory_threshold, rmm)
@@ -135,7 +140,7 @@ def compute_knn(data_dir, query_filename, query_count, sorted_data_filename, bas
     batch_count = math.ceil(len(table) / batch_size)
     assert ((len(table) % batch_size == 0) or k <= (len(table) % batch_size)), f"Cannot generate k of {k} with only {len(table)} rows and batch_size of {batch_size}."
 
-    process_batches(data_dir, table, query_table, batch_count, batch_size, k, split)
+    process_batches(data_dir, model_prefix, table, query_table, batch_count, batch_size, k, split)
 
 
 def cleanup(*args):
@@ -148,7 +153,14 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(data_dir, table, query_table, batch_count, batch_size, k, split):
+def process_batches(data_dir, 
+                    model_prefix,
+                    table, 
+                    query_table, 
+                    batch_count, 
+                    batch_size, 
+                    k, 
+                    split):
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(table) - batch_offset
@@ -187,7 +199,9 @@ def process_batches(data_dir, table, query_table, batch_count, batch_size, k, sp
 
                 print(f'dataset shape {dataset.shape}')
                 print(f'query shape {query.shape}')
-                cupydistances1, cupyindices1 = knn(dataset, query, k)
+                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32), 
+                                                   query.astype(np.float32), 
+                                                   k)
 
                 distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
                 # add batch_offset to indices
@@ -204,23 +218,24 @@ def process_batches(data_dir, table, query_table, batch_count, batch_size, k, sp
         distances['RowNum'] = range(0, len(distances))
         indices['RowNum'] = range(0, len(indices))
 
-        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/indices{start}.parquet')
+        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_distances{start}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_indices{start}.parquet')
 
         cleanup(df_numeric, distances, indices, dataset)
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        print("Usage: python cu_knn.py query_filename query_count sorted_data_filename base_count dimensions mem_tune k")
+    if len(sys.argv) != 8:
+        print("Usage: python cu_knn.py model_name query_filename query_count sorted_data_filename base_count dimensions mem_tune k")
         sys.exit(1)
 
-    query_filename = sys.argv[1]
-    query_count = int(sys.argv[2])
-    sorted_data_filename = sys.argv[3]
-    base_count = int(sys.argv[4])
-    dimensions = int(sys.argv[5])
-    mem_tune = sys.argv[6] == 'True'
-    k = int(sys.argv[7])
+    model_name = sys.argv[1]
+    query_filename = sys.argv[2]
+    query_count = int(sys.argv[3])
+    sorted_data_filename = sys.argv[4]
+    base_count = int(sys.argv[5])
+    dimensions = int(sys.argv[6])
+    mem_tune = sys.argv[7] == 'True'
+    k = int(sys.argv[8])
 
-    compute_knn(query_filename, query_count, sorted_data_filename, base_count, dimensions, True, k)
+    compute_knn('.', model_name, query_filename, query_count, sorted_data_filename, base_count, dimensions, True, k)

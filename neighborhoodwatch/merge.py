@@ -10,32 +10,37 @@ import numpy as np
 
 from tqdm import tqdm
 
+from neighborhoodwatch.parquet_to_format import get_model_prefix
 
-def get_file_count(data_dir):
-    pattern = re.compile(r'(.*?)/indices(\d+)\.parquet')
+
+def get_file_count(data_dir, model_prefix):
+    str_pattern = r"" + data_dir + "/" + model_prefix + "_indices(\d+)\.parquet"
+    pattern = re.compile(str_pattern)
     file_count = 0
 
-    files = sorted(glob.glob(f"{data_dir}/indices*.parquet"))
+    files = sorted(glob.glob(f"{data_dir}/{model_prefix}_indices*.parquet"))
     for filename in files:
         match = pattern.match(filename)
         if match:
-            i = int(match.group(2))
+            i = int(match.group(1))
             file_count = file_count + 1
     
     return file_count
 
 
-def merge_indices_and_distances(data_dir):
-    file_count = get_file_count(data_dir)
+def merge_indices_and_distances(data_dir, model_name, k=100):
+    model_prefix = get_model_prefix(model_name)
+
+    file_count = get_file_count(data_dir, model_prefix)
     if file_count > 0:
-        indices_table = pq.read_table(f"{data_dir}/indices0.parquet")
-        distances_table = pq.read_table(f"{data_dir}/distances0.parquet")
+        indices_table = pq.read_table(f"{data_dir}/{model_prefix}_indices0.parquet")
+        distances_table = pq.read_table(f"{data_dir}/{model_prefix}_distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
         batch_count = math.ceil(len(indices_table) / batch_size)
 
-        final_indices_filename = f"{data_dir}/final_indices.parquet"
-        final_distances_filename = f"{data_dir}/final_distances.parquet"
+        final_indices_filename = f"{data_dir}/{model_prefix}_final_indices.parquet"
+        final_distances_filename = f"{data_dir}/{model_prefix}_final_distances.parquet"
 
         final_indices_writer = pq.ParquetWriter(final_indices_filename, indices_table.schema)
         final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
@@ -46,8 +51,8 @@ def merge_indices_and_distances(data_dir):
             final_distances = pd.DataFrame()
 
             for i in range(file_count):
-                indices_table = pq.read_table(f"{data_dir}/indices{i}.parquet")
-                distances_table = pq.read_table(f"{data_dir}/distances{i}.parquet")
+                indices_table = pq.read_table(f"{data_dir}/{model_prefix}_indices{i}.parquet")
+                distances_table = pq.read_table(f"{data_dir}/{model_prefix}_distances{i}.parquet")
 
                 rownum_index = indices_table.schema.get_field_index('RowNum')
                 indices_table = indices_table.remove_column(rownum_index)
@@ -66,7 +71,6 @@ def merge_indices_and_distances(data_dir):
                     final_indices = indices_batch
                     final_distances = distances_batch
                 else:
-
                     # Concatenate the distances and indices along the column axis (axis=1)
                     concatenated_distances = pd.concat([final_distances, distances_batch], axis=1)
                     concatenated_indices = pd.concat([final_indices, indices_batch], axis=1)
@@ -92,9 +96,9 @@ def merge_indices_and_distances(data_dir):
                     sorted_indices = pd.DataFrame(sorted_indices_np, index=concatenated_indices.index,
                                                 columns=concatenated_indices.columns)
 
-                    # Select the top 100 distances and corresponding indices for each row
-                    final_distances = sorted_distances.iloc[:, :100]
-                    final_indices = sorted_indices.iloc[:, :100]
+                    # Select the top K distances and corresponding indices for each row
+                    final_distances = sorted_distances.iloc[:, :k]
+                    final_indices = sorted_indices.iloc[:, :k]
 
                     # Ensure the final distances are sorted in ascending order for each row
                     assert (final_distances.apply(lambda row: row.is_monotonic_increasing, axis=1).all())
@@ -116,4 +120,4 @@ def merge_indices_and_distances(data_dir):
 
 
 if __name__ == "__main__":
-    merge_indices_and_distances()
+    merge_indices_and_distances('.', 'intfloat/e5-query-v2', 10)

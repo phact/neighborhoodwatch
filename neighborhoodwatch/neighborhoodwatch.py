@@ -1,9 +1,10 @@
 import argparse
 
-import neighborhoodwatch.cu_knn
 from neighborhoodwatch.generate_dataset import generate_query_dataset, generate_base_dataset
-from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file
+from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file, get_model_prefix, validate_files
 from neighborhoodwatch.merge import merge_indices_and_distances
+from neighborhoodwatch.cu_knn import compute_knn
+
 import sys
 from rich import print as rprint
 from rich.markdown import Markdown
@@ -71,46 +72,57 @@ Some example commands:\n
 
     rprint(Markdown("**Computing knn** "),'')
     section_time = time.time()
-    neighborhoodwatch.cu_knn.compute_knn(args.data_dir, query_filename, args.query_count, base_filename, args.base_count,
-                                         args.dimensions, args.enable_memory_tuning, args.k)
+    compute_knn(args.data_dir, 
+                args.model_name,
+                query_filename, 
+                args.query_count, 
+                base_filename, 
+                args.base_count,
+                args.dimensions, 
+                args.enable_memory_tuning, 
+                args.k)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
     rprint(Markdown("**Merging indices and distances** "),'')
     section_time = time.time()
-    neighborhoodwatch.merge.merge_indices_and_distances(args.data_dir)
+    merge_indices_and_distances(args.data_dir, 
+                                args.model_name, 
+                                args.k)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
+
+    model_prefix = get_model_prefix(args.model_name)
 
     rprint(Markdown("**Generating ivec's and fvec's** "), '')
     section_time = time.time()
     query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = \
-        neighborhoodwatch.parquet_to_format.generate_ivec_fvec_files(args.data_dir,
-                                                                     'final_indices.parquet',
-                                                                     base_filename,
-                                                                     query_filename,
-                                                                     'final_distances.parquet',
-                                                                     args.base_count,
-                                                                     args.query_count,
-                                                                     args.k,
-                                                                     args.dimensions,
-                                                                     args.model_name)
+        generate_ivec_fvec_files(args.data_dir,
+                                 args.model_name,
+                                 f"{model_prefix}_final_indices.parquet",
+                                 base_filename,
+                                 query_filename,
+                                 f"{model_prefix}_final_distances.parquet",
+                                 args.base_count,
+                                 args.query_count,
+                                 args.k,
+                                 args.dimensions)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
     if args.gen_hdf5:
         rprint(Markdown("**Generating hdf5** "), '')
         section_time = time.time()
-        neighborhoodwatch.parquet_to_format.generate_hdf5_file(args.data_dir,
-                                                               'final_indices.parquet',
-                                                                base_filename,
-                                                                query_filename,
-                                                                'final_distances.parquet',
-                                                                args.base_count,
-                                                                args.query_count,
-                                                                args.k,
-                                                                args.dimensions,
-                                                                args.model_name)
+        generate_hdf5_file(args.data_dir,
+                           args.model_name,
+                           f"{model_prefix}_final_indices.parquet",
+                           base_filename,
+                           query_filename,
+                           f"{model_prefix}_final_distances.parquet",
+                           args.base_count,
+                           args.query_count,
+                           args.k,
+                           args.dimensions)
         rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
         rprint(Markdown("---"),'')
 
@@ -119,7 +131,10 @@ Some example commands:\n
         if yes_no_str == 'y' or yes_no_str == 'yes':
             rprint(Markdown("**Validating ivec's and fvec's** "), '')
             section_time = time.time()
-            neighborhoodwatch.parquet_to_format.validate_files(query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec)
+            validate_files(query_vector_fvec, 
+                           indices_ivec, 
+                           distances_fvec, 
+                           base_vector_fvec)
             rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
             rprint(Markdown("---"),'')
 

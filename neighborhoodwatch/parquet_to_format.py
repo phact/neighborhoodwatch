@@ -22,6 +22,14 @@ def get_full_filename(data_dir, filename):
     return full_filename
 
 
+def get_model_prefix(model_name):
+    if model_name:
+        model_prefix = model_name.replace("/", "_")
+    else:
+        model_prefix = "ada_002"
+    return model_prefix
+
+
 # Reading Parquet into a DataFrame
 def read_parquet_to_dataframe(data_dir, filename):
     full_filename = get_full_filename(data_dir, filename)
@@ -85,7 +93,6 @@ def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_column
             f.write(vec.tobytes())
 
 
-# Generate query_vector.fvec file
 def read_and_extract(data_dir, input_parquet, base_count, dimensions):
     full_filename = get_full_filename(data_dir, input_parquet)
     table = pq.read_table(full_filename)
@@ -111,7 +118,7 @@ def generate_query_vectors_fvec(data_dir, input_parquet, base_count, query_count
 
 
 # Generate base_vectors.fvec file
-def generate_base_vectors_fvec(data_dir, input_parquet, base_count, k, dimensions, model_prefix):
+def generate_base_vectors_fvec(data_dir, input_parquet, base_count, dimensions, model_prefix):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions)
     output_fvec = f'{data_dir}/{model_prefix}_{base_count}_base_vectors.fvec'
     write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
@@ -134,6 +141,7 @@ def generate_indices_ivec(data_dir, input_parquet, base_count, query_count, k, m
 
 
 def generate_ivec_fvec_files(data_dir,
+                             model_name,
                              indices_parquet, 
                              base_vectors_parquet, 
                              query_vectors_parquet, 
@@ -141,15 +149,12 @@ def generate_ivec_fvec_files(data_dir,
                              base_count, 
                              query_count, 
                              k, 
-                             dimensions, 
-                             model_name):
-    if model_name:
-        model_prefix = model_name.replace("/", "_")
-    else:
-        model_prefix = "ada_002"
-    indices_ivec = generate_indices_ivec(data_dir, indices_parquet, base_count, query_count, k, model_prefix)
+                             dimensions):
+    model_prefix = get_model_prefix(model_name)
+    
     query_vector_fvec = generate_query_vectors_fvec(data_dir, query_vectors_parquet, base_count, query_count, dimensions, model_prefix)
-    base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, k, dimensions, model_prefix)
+    base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, dimensions, model_prefix)
+    indices_ivec = generate_indices_ivec(data_dir, indices_parquet, base_count, query_count, k, model_prefix)
     distances_fvec = generate_distances_fvec(data_dir, final_distances_parquet, base_count, query_count, k, model_prefix)
 
     rprint(Markdown("Generated files: "), '')
@@ -163,6 +168,7 @@ def generate_ivec_fvec_files(data_dir,
 
 
 def generate_hdf5_file(data_dir,
+                       model_name,
                        indices_parquet, 
                        base_vectors_parquet, 
                        query_vectors_parquet, 
@@ -170,12 +176,8 @@ def generate_hdf5_file(data_dir,
                        base_count, 
                        query_count, 
                        k, 
-                       dimensions, 
-                       model_name):
-    if model_name:
-        model_prefix = model_name.replace("/", "_")
-    else:
-        model_prefix = "ada_002"
+                       dimensions):
+    model_prefix = get_model_prefix(model_name)
 
     filename = f'{model_prefix}_base_{base_count}_query_{query_count}.hdf5'
     filename = get_full_filename(data_dir, filename)
