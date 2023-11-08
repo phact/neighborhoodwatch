@@ -4,7 +4,7 @@ import multiprocessing
 import time
 
 import spacy
-from datasets import load_dataset, Dataset
+import datasets
 from tqdm import tqdm
 import openai
 import numpy as np
@@ -16,16 +16,16 @@ import pyarrow.compute as pc
 from sentence_transformers import SentenceTransformer
 from vertexai.preview.language_models import TextEmbeddingModel
 
-from neighborhoodwatch.parquet_to_format import get_full_filename
+from neighborhoodwatch.nw_utils import *
 
 
-BASE_DATASET = "wikipedia"
-BASE_CONFIG = "20220301.en"
-
-QUERY_DATASET = "squad"
-
-nlp = spacy.blank("en")
+nlp = spacy.blank(f"{BASE_DATASET_LANG}")
 nlp.add_pipe("sentencizer")
+
+# Set huggingface datasets logging level to debug
+datasets.logging.set_verbosity_debug()
+# datasets.logging.set_verbosity_warn()
+# datasets.logging.set_verbosity_info()
 
 
 def get_batch_embeddings_ada_002(text_list):
@@ -305,7 +305,7 @@ def generate_query_dataset(data_dir, row_count, model_name=None):
         print(f"file {filename} already exists")
         return filename
 
-    full_dataset = load_dataset(QUERY_DATASET, cache_dir=".cache")["train"]
+    full_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache")["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
     processed_count = process_dataset(streamer, full_dataset, row_count, "question", model_name)
     streamer.close()
@@ -330,7 +330,11 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
     query_titles = pc.unique(query_dataset.column("title")).to_pylist()
 
     # TODO: for a large dataset, it is recommended to use a remote runner like Dataflow or Spark
-    full_dataset = load_dataset(BASE_DATASET, BASE_CONFIG, cache_dir=".cache", beam_runner='DirectRunner')["train"]
+    full_dataset = datasets.load_dataset(BASE_DATASET, 
+                                         BASE_CONFIG, 
+                                         cache_dir=".cache", 
+                                         beam_runner='DirectRunner', 
+                                         split='train')
     streamer = ParquetStreamer(filename, full_dataset.column_names)
 
     # TODO consider iterable dataset

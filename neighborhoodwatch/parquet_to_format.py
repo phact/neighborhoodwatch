@@ -9,25 +9,13 @@ from rich.markdown import Markdown
 import struct
 import os
 
+from neighborhoodwatch.nw_utils import *
+
 
 ##
 # Convert the Parquet file into the specified target format.
 # - 'ivec', 'fvec', and 'hdf5' format are currently supported
 ##
-
-def get_full_filename(data_dir, filename):
-    full_filename = filename
-    if not filename.startswith(data_dir):
-        full_filename = f'{data_dir}/{filename}'
-    return full_filename
-
-
-def get_model_prefix(model_name):
-    if model_name:
-        model_prefix = model_name.replace("/", "_")
-    else:
-        model_prefix = "ada_002"
-    return model_prefix
 
 
 # Reading Parquet into a DataFrame

@@ -1,0 +1,51 @@
+FROM ubuntu:22.04
+
+WORKDIR /neighbourhoodwatch
+COPY ./launcher.py ./
+COPY ./pyproject.toml ./
+COPY ./README.md ./
+COPY ./requirements.txt ./
+COPY ./tests/ ./tests
+COPY ./neighborhoodwatch/ ./neighborhoodwatch
+
+
+# Install base utilities
+RUN apt update \
+    && apt install -y build-essential \
+    && apt install -y wget tree zip zlib1g \
+    && apt clean \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV UBUNTU_VERSION=22.04 \
+    POETRY_VERSION=1.7.0 \
+    CUDA_TOOLKIT_VER=12.2.0 \
+    CUDNN_VERSION=8.9.6.50 \
+    NCCL_VERSION=2.19.3 
+
+
+##
+# Install Nividia CuDA toolkit and dependencies; CuDNN and NCCL libraries
+##  
+RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
+RUN dpkg -i cuda-keyring_1.1-1_all.deb
+
+RUN apt update \
+    && apt -y install cuda-12-2 cuda-toolkit-12-2 \
+    && apt install -y libcudnn8=8.9.6.50-1+cuda12.2 libcudnn8-dev=8.9.6.50-1+cuda12.2 libcudnn8-samples=8.9.6.50-1+cuda12.2 \
+    && apt install libnccl2=2.18.5-1+cuda12.2 libnccl-dev=2.18.5-1+cuda12.2
+
+##
+# Install python 3.10 with Conda virtual environment
+##
+ENV CONDA_DIR /opt/conda
+RUN wget --quiet https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh && \
+    /bin/bash ~/miniconda.sh -b -p /opt/conda
+ENV PATH=$CONDA_DIR/bin:$PATH
+
+# Create conda environment with python 3.10
+RUN conda create -y --name py310 python=3.10
+RUN echo "source activate py310" > ~/.bashrc
+ENV PATH $CONDA_DIR/envs/py310/bin:$PATH
+
+# Install poetry and dependencies
+RUN pip install "poetry==$POETRY_VERSION"

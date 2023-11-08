@@ -10,7 +10,7 @@ import numpy as np
 
 from tqdm import tqdm
 
-from neighborhoodwatch.parquet_to_format import get_model_prefix
+from neighborhoodwatch.nw_utils import *
 
 
 def get_file_count(data_dir, model_prefix):

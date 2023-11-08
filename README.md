@@ -4,11 +4,6 @@ NeighborhoodWatch (`nw`) is a GPU powered brute force knn ground truth dataset g
 
 ### Set Up the Environment
 
-**NOTE**: Please refer to [install_env.sh](bash/install_env.sh) for more information about the environment setup details.
-* This script has been verified on AWS `p3.8xlarge` instance type with `Ubuntun 22.04` OS
-
----
-
 At high level, in order to run this program, the following prerqusites need to be satsified:
 * One computing instance with Nividia GPU (e.g. AWS `p3.8xlarge` instance type)
 * Nivdia CUDA toolkit and driver 12 installed ([link](https://docs.nvidia.com/cuda/cuda-installation-guide-linux/index.html))
@@ -18,32 +13,40 @@ At high level, in order to run this program, the following prerqusites need to b
    * A python virtual environemtn (e.g. MiniConda) is highly recommended
 * Poetry Python dependency management
 
+An example of setting up a bare-metal environment on an AWS `p3.8xlarge` instance with `Ubuntun 22.04` OS is provided in the following script:
+* [install_bm_env.sh](bash/install_env.sh) 
+
+For convenience purposes, a [Dockerfile](./Dockerfile) is also provided which allows you to build a docker image allows you to run the `nw` program within a docker container with all the required driver and library dependencies. For more detailed information, please refer to the [nw_docker](./nw_docker.md) document
+
+---
+
 ### Run the Program
 
-Run `nw` with poetry. Please see the `usage` description (as below) for the available CLI parameters.
+First check and install Python dependencies by running the following commands in the home directory of this program:
+
 ```
-poetry run nw <list of parameters>
+poetry lock && poetry install
 ```
 
-`usage`:
-
+Then run the program with `poetry run nw <input parameter list>` command. The available input parameter list is as below:
 ```
 $ poetry run nw -h
-usage: nw [-h] [-k K] [-m MODEL_NAME] [-d DATA_DIR] [--enable-memory-tuning] [--disable-memory-tuning] [--gen-hdf5 | --no-gen-hdf5] [--validation | --no-validation] query_count base_count dimensions
+usage: nw [-h] [-m MODEL_NAME] [-k K] [-d DATA_DIR] [-y] [--enable-memory-tuning] [--disable-memory-tuning] [--gen-hdf5 | --no-gen-hdf5] [--validation | --no-validation] query_count base_count
 
 nw (neighborhood watch) uses GPU acceleration to generate ground truth KNN datasets
 
 positional arguments:
   query_count           number of query vectors to generate
   base_count            number of base vectors to generate
-  dimensions            number of dimensions for the embedding model
 
 options:
   -h, --help            show this help message and exit
-  -k K, --k K
   -m MODEL_NAME, --model_name MODEL_NAME
+                        model name to use for generating embeddings, i.e. ada-002, textembedding-gecko, or intfloat/e5-large-v2
+  -k K, --k K           number of neighbors to compute per query vector
   -d DATA_DIR, --data_dir DATA_DIR
                         Directory to store the generated data (default: knn_dataset)
+  -y, --yes             Skip the confirmation prompt and proceed with the generation
   --enable-memory-tuning
                         Enable memory tuning
   --disable-memory-tuning
@@ -55,10 +58,10 @@ options:
 
 Some example commands:
 
-    nw 10000 10000 1024 -k 100 -m 'intfloat/e5-large-v2' --disable-memory-tuning
-    nw 10000 10000 768 -k 100 -m 'textembedding-gecko' --disable-memory-tuning
-    nw 10000 10000 384 -k 100 -m 'intfloat/e5-small-v2' --disable-memory-tuning
-    nw 10000 10000 768 -k 100 -m 'intfloat/e5-base-v2' --disable-memory-tuning
+    nw 1000 10000 -k 100 -m 'textembedding-gecko' --disable-memory-tuning
+    nw 1000 10000 -k 100 -m 'intfloat/e5-large-v2' --disable-memory-tuning
+    nw 1000 10000 -k 100 -m 'intfloat/e5-small-v2' --disable-memory-tuning
+    nw 1000 10000 -k 100 -m 'intfloat/e5-base-v2' --disable-memory-tuning
 ```
 
 ### Generated Datasets
@@ -74,6 +77,7 @@ In particular, the following datasets include the KNN ground truth results:
 | `fvec` | `distances` dataset (distances) | `<model_name>_<base_count>_distances_<query_count>` |
 | `ivec` | `neighors` dataset (indices) | `<model_name>_<base_count>_indices_query_<query_count>` |
 | `hdf5` | consolidated hdf5 dataset of the above 4 datasets | `<model_name>_base_<base_count>_query_<query_count>` |
+
 
 ### Run the Tests
 

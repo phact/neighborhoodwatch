@@ -6,3 +6,7 @@ venv
 .env
 data
 tests/data
+nw.zip
+*.bkup
+wget-log
+nvidia_cuda/
