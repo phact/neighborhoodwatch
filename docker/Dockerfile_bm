@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 WORKDIR /neighbourhoodwatch
 COPY ./launcher.py ./
 COPY ./pyproject.toml ./
-COPY ./README.md ./
+COPY ./*.md ./
 COPY ./requirements.txt ./
 COPY ./tests/ ./tests
 COPY ./neighborhoodwatch/ ./neighborhoodwatch
@@ -48,4 +48,5 @@ RUN echo "source activate py310" > ~/.bashrc
 ENV PATH $CONDA_DIR/envs/py310/bin:$PATH
 
 # Install poetry and dependencies
-RUN pip install "poetry==$POETRY_VERSION"
+RUN pip install "poetry==$POETRY_VERSION" \
+    && pip install apache-beam

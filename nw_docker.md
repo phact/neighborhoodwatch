@@ -42,24 +42,28 @@ On the target instance with GPU capablity,
 
 1. Pull the docker image
 ```
-docker pull <docker_profile_id>/neighborhoodwatch:latest
+$ docker pull <docker_profile_id>/neighborhoodwatch:latest
 ```
 
 2. Start a docker container with the `nw` image 
-
 ```
-docker run --rm --runtime=nvidia --gpus all --dit <docker_profile_id>/neighborhoodwatch
+$ docker run --rm --runtime=nvidia --gpus all --dit <docker_profile_id>/neighborhoodwatch
 ```
 
 3. Log into the container 
 ```
-NW_CONTAINER_ID=$(docker ps | grep neighborhoodwatch | awk '{print $1}')
-docker exec -it ${NW_CONTAINER_ID} /bin/bash
+$ NW_CONTAINER_ID=$(docker ps | grep neighborhoodwatch | awk '{print $1}')
+$ docker exec -it ${NW_CONTAINER_ID} /bin/bash
 ```
 
-4. Run the `nw` program
+4. Run the `nw` program inside the container
 ```
-poetry lock
-poetry install
-poetry run nw <...>
+# poetry lock
+# poetry install
+# poetry run nw <...>
+```
+
+5. Last but not the least, exit the container and copy the generated datasets from the container to the target instance
+```
+$ docker cp ${NW_CONTAINER_ID}:/neighbourhoodwatch/knn_dataset/. .
 ```
