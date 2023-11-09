@@ -63,10 +63,13 @@ conda activate py310
 echo
 echo
 echo "=================================================================="
-echo "== Install Poetry                                               =="
+echo "== Install Poetry and apache-beam                               =="
 echo "=================================================================="
 echo
-curl -sSL https://install.python-poetry.org | python3 -
+# NOTE: can't manage 'apache-beam' with poetry due to unsolvable dependency conflict
+pip install apache-beam
+pip install poetry
+echo "Make sure to run 'poetry lock && poetry install' in the project directory!"
 
 echo "export PATH=\"/home/ubuntu/.local/bin:$PATH\"" >> ~/.bashrc
 source ~/.bashrc
