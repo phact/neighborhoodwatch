@@ -23,9 +23,16 @@ nlp = spacy.blank(f"{BASE_DATASET_LANG}")
 nlp.add_pipe("sentencizer")
 
 # Set huggingface datasets logging level to debug
-datasets.logging.set_verbosity_debug()
-# datasets.logging.set_verbosity_warn()
+# datasets.logging.set_verbosity_debug()
+datasets.logging.set_verbosity_warning()
 # datasets.logging.set_verbosity_info()
+
+
+def is_zero_embedding(embedding):
+  if all(value == 0 for value in embedding):
+    return True
+  else:
+    return False
 
 
 def get_batch_embeddings_ada_002(text_list):
@@ -123,6 +130,11 @@ class EmbeddingGenerator:
         self.chunk_size = 1000
         self.dimensions = self.model.get_sentence_embedding_dimension()
 
+    # def simulate_zero_embedding(self, text):
+    #     zero_vectors = [np.zeros(self.dimensions) for _ in range(len(text))]
+    #     zero_vectors_array = np.stack(zero_vectors)
+    #     return zero_vectors_array
+    
     def generate_embedding(self, text):
         # Ensure the text is a list of sentences
         if isinstance(text, str):
@@ -143,15 +155,17 @@ def split_into_sentences(text):
 def get_embeddings_from_map(text_map, generator):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
     embedding_array = None
+
     if generator is not None:
         embedding_array = get_batch_embeddings_from_generator(flattened_sentences, generator)
     else:
         embedding_array = get_batch_embeddings_ada_002(flattened_sentences)
+    
     iterator = iter(embedding_array)
     return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map]
 
 
-def process_dataset(streamer, dataset, row_count, embedding_column, model_name):
+def process_dataset(streamer, dataset, row_count, embedding_column, model_name, skip_zero_vec=True):
     meta_array = []
     embedding_array = []
 
@@ -161,6 +175,7 @@ def process_dataset(streamer, dataset, row_count, embedding_column, model_name):
 
     i = 0
     row_counter = 0
+    skipped_embedding_cnt = 0
     sentence_batch_counter = 0
     text_map = []
     active_rows = []
@@ -191,8 +206,13 @@ def process_dataset(streamer, dataset, row_count, embedding_column, model_name):
             for embedding_tuple in embedding_tuple_list:
                 index = embedding_tuple[0]
                 embedding_list = embedding_tuple[1]
+            
                 #for idx, embedding in tqdm(enumerate(embedding_list)):
                 for idx, embedding in enumerate(embedding_list):
+                    if skip_zero_vec and is_zero_embedding(embedding):
+                        skipped_embedding_cnt += 1
+                        continue
+
                     meta_row_array = []
                     for column in dataset.column_names:
                         if column == "title":
@@ -214,20 +234,26 @@ def process_dataset(streamer, dataset, row_count, embedding_column, model_name):
                     embedding_array.append(
                         embedding
                     )
+
                     embedding_counter += 1
                     if embedding_counter >= row_count:
                         print(f"Total embeddings so far {embedding_counter} out of {row_count}")
-                        print(len(meta_array))
-                        print(len(meta_array[0]))
-                        streamer.stream_to_parquet(meta_array, embedding_array)
+                        if (len(meta_array) > 0) and (len(embedding_array) > 0):
+                            streamer.stream_to_parquet(meta_array, embedding_array)
                         return embedding_counter
-            streamer.stream_to_parquet(meta_array, embedding_array)
+        
+            if (len(meta_array) > 0) and (len(embedding_array) > 0):
+                streamer.stream_to_parquet(meta_array, embedding_array)
             i = 0
             meta_array = []
             embedding_array = []
             active_rows = []
             text_map = []
+        
         row_counter += 1
+
+    if skip_zero_vec:
+        print(f"Skipped {skipped_embedding_cnt} zero embeddings")
 
     return embedding_counter
 
@@ -267,7 +293,7 @@ class ParquetStreamer:
         self.writer = None
         print(f"Initiated streaming to file {self.filename}")
 
-    def stream_to_parquet(self, meta_array, embedding_array):
+    def stream_to_parquet(self, meta_array, embedding_array):        
         meta_array = np.array(meta_array)
         embedding_array = np.array(embedding_array)
 
@@ -294,7 +320,7 @@ class ParquetStreamer:
             print(f"Finished streaming to {self.filename}")
 
 
-def generate_query_dataset(data_dir, row_count, model_name=None):
+def generate_query_dataset(data_dir, row_count, model_name=None, skip_zero_vec=True):
     source = "query_vector"
     filename = f'{data_dir}/{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
 
@@ -307,15 +333,16 @@ def generate_query_dataset(data_dir, row_count, model_name=None):
 
     full_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache")["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
-    processed_count = process_dataset(streamer, full_dataset, row_count, "question", model_name)
+    processed_count = process_dataset(streamer, full_dataset, row_count, "question", model_name, skip_zero_vec)
     streamer.close()
     assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
 
     return filename
 
 
-def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name):
+def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name, skip_zero_vec=True):
     processed_count = 0
+    skipped_count = 0
 
     source = "base_vector"
     filename = f'{data_dir}/{model_name.replace("/","_")}_{source}_data_{row_count}.parquet'
@@ -352,7 +379,7 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
         print(f"no matching base title for query titles {query_titles}")
     else:
         print("processing dataset")
-        processed_count = process_dataset(streamer, filtered_dataset, row_count, "text", model_name)
+        processed_count = process_dataset(streamer, filtered_dataset, row_count, "text", model_name, skip_zero_vec)
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     if row_count > processed_count:
@@ -368,8 +395,9 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
 
         print("processing dataset")
         #filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
-        processed_count += process_dataset(streamer, filtered_dataset, row_count - processed_count, "text", model_name)
-        assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
+        processed_count += process_dataset(streamer, filtered_dataset, row_count - processed_count, "text", model_name, skip_zero_vec)
+        if not skip_zero_vec:
+            assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
 
     streamer.close()
 

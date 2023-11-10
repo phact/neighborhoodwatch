@@ -41,9 +41,10 @@ Some example commands:\n
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('-d', '--data_dir', type=str, default='knn_dataset', help='Directory to store the generated data (default: knn_dataset)')
     parser.add_argument('-y', '--yes', action='store_true', help='Skip the confirmation prompt and proceed with the generation')
+    parser.add_argument('-sz', '--skip_zero_vec', action='store_true', default=True, help='Skip generating zero vectors when failing to retrieve the embedding (default: True)')
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
     parser.add_argument('--disable-memory-tuning', action='store_false', help='Disable memory tuning (useful for very small datasets)')
-    parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True, help='Generate hdf5 files (default: True)')
+    parser.add_argument('--gen_hdf5', action=argparse.BooleanOptionalAction, default=True, help='Generate hdf5 files (default: True)')
     parser.add_argument('--validation', action=argparse.BooleanOptionalAction, default=False, help='Validate the generated files (default: False)')
     
     args = parser.parse_args()
@@ -64,7 +65,8 @@ Some example commands:\n
 * query count: `{args.query_count}`\n
 * base vector count: `{args.base_count}`\n
 * model name: `{args.model_name}`\n
-* dimension size: `{dimensions}`"""), '')
+* dimension size: `{dimensions}`\n
+* skipe zero vector: `{args.skip_zero_vec}`"""), '')
 
     
     if not args.yes:
@@ -77,13 +79,13 @@ Some example commands:\n
 
     rprint(Markdown("**Generating query dataset** "),'')
     section_time = time.time()
-    query_filename = generate_query_dataset(args.data_dir, args.query_count, args.model_name)
+    query_filename = generate_query_dataset(args.data_dir, args.query_count, args.model_name, args.skip_zero_vec)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
     rprint(Markdown("**Generating base dataset** "),'')
     section_time = time.time()
-    base_filename = generate_base_dataset(args.data_dir, query_filename, args.base_count, args.model_name)
+    base_filename = generate_base_dataset(args.data_dir, query_filename, args.base_count, args.model_name, args.skip_zero_vec)
     rprint(Markdown(f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"),'')
 
