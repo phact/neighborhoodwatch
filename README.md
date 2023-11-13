@@ -31,8 +31,8 @@ poetry lock && poetry install
 Then run the program with `poetry run nw <input parameter list>` command. The available input parameter list is as below:
 ```
 $ poetry run nw -h
-usage: nw [-h] [-m MODEL_NAME] [-k K] [-d DATA_DIR] [--skip-confirmation | --no-skip-confirmation] [--skip-zero-vec | --no-skip-zero-vec] [--use-dataset-api | --no-use-dataset-api] [--gen-hdf5 | --no-gen-hdf5] [--post-validation | --no-post-validation]
-          [--enable-memory-tuning] [--disable-memory-tuning]
+usage: nw [-h] [-m MODEL_NAME] [-k K] [-d DATA_DIR] [--skip-zero-vec | --no-skip-zero-vec] [--use-dataset-api | --no-use-dataset-api] [--gen-hdf5 | --no-gen-hdf5] [--post-validation | --no-post-validation] [--enable-memory-tuning]
+          [--disable-memory-tuning]
           query_count base_count
 
 nw (neighborhood watch) uses GPU acceleration to generate ground truth KNN datasets
@@ -48,8 +48,6 @@ options:
   -k K, --k K           number of neighbors to compute per query vector
   -d DATA_DIR, --data_dir DATA_DIR
                         Directory to store the generated data (default: knn_dataset)
-  --skip-confirmation, --no-skip-confirmation
-                        Skip the confirmation prompt and proceed with the generation (default: False)
   --skip-zero-vec, --no-skip-zero-vec
                         Skip generating zero vectors when failing to retrieve the embedding (default: True) (default: True)
   --use-dataset-api, --no-use-dataset-api
