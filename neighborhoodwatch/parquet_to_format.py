@@ -207,24 +207,34 @@ def write_hdf5(data_dir, df, filename, datasetname):
 
 
 def validate_files(data_dir, query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec):
-    for n in range(count_vectors(data_dir, query_vector_fvec)):
+    zero_query_vector_count = 0
+    total_query_vector_count = count_vectors(data_dir, query_vector_fvec)
+    total_mismatch_count = 0
+    
+    for n in range(total_query_vector_count):
         nth_query_vector = get_nth_vector(data_dir, query_vector_fvec, n)
         first_indexes = get_nth_vector(data_dir, indices_ivec, n)
         distance_vector = get_nth_vector(data_dir, distances_fvec, n)
 
         if np.count_nonzero(nth_query_vector) == 0:
+            print(f"Skipping zero query vector {n}/{total_query_vector_count}")
+            zero_query_vector_count += 1
             continue
+
         col = 0
         for index in first_indexes:
             base_vector = get_nth_vector(data_dir, base_vector_fvec, index)
             similarity = dot_product(nth_query_vector, base_vector)
             distance = distance_vector[col]
             if not np.isclose((1-similarity), distance/2):
+                total_mismatch_count += 1
                 print(f"Expected 1 - similarity {1-similarity} to equal distance {distance} for query vector {n} and base vector {index}")
                 print(f"Difference {1-similarity - distance/2}")
                 #print(base_vector)
                 #print(nth_query_vector)
             col += 1
+
+    print(f"Total mismatch count: {total_mismatch_count}")
 
 
 def dot_product(A, B):

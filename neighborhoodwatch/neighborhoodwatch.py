@@ -41,7 +41,6 @@ Some example commands:\n
     parser.add_argument('-m', '--model_name', type=str, default='ada-002', help='model name to use for generating embeddings, i.e. ada-002, textembedding-gecko, or intfloat/e5-large-v2')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('-d', '--data_dir', type=str, default='knn_dataset', help='Directory to store the generated data (default: knn_dataset)')
-    parser.add_argument('--skip-confirmation', action=argparse.BooleanOptionalAction, default=False, help='Skip the confirmation prompt and proceed with the generation')
     parser.add_argument('--skip-zero-vec', action=argparse.BooleanOptionalAction, default=True, help='Skip generating zero vectors when failing to retrieve the embedding (default: True)')
     parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=True, help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True, help='Generate hdf5 files (default: True)')
@@ -71,7 +70,6 @@ Some example commands:\n
 * model name: `{args.model_name}`\n
 * dimension size: `{dimensions}`\n
 --- behavior specification ---\n
-* skipe pre confirmation: `{args.skip_confirmation}`\n
 * skipe zero vector: `{args.skip_zero_vec}`\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
@@ -79,11 +77,6 @@ Some example commands:\n
 * enable memory tuning: `{args.enable_memory_tuning}`
 """))
     rprint('', Markdown("---"))
-    
-    if not args.skip_confirmation:
-        input_str = input("This may require first downloading a larget dataset from the internet, do you want to continue? (y/n/yes/no): ")
-        if input_str != 'y' and input_str != 'yes':
-            sys.exit(0)
 
     if not os.path.exists(args.data_dir):
         os.makedirs(args.data_dir)
@@ -174,7 +167,8 @@ Some example commands:\n
         if yes_no_str == 'y' or yes_no_str == 'yes':
             rprint(Markdown("**Validating ivec's and fvec's** "), '')
             section_time = time.time()
-            validate_files(query_vector_fvec, 
+            validate_files(args.data_dir,
+                           query_vector_fvec, 
                            indices_ivec, 
                            distances_fvec, 
                            base_vector_fvec)
