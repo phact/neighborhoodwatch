@@ -101,7 +101,10 @@ def read_and_extract(data_dir, input_parquet, base_count, dimensions):
 def generate_query_vectors_fvec(data_dir, input_parquet, base_count, query_count, dimensions, model_prefix):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions)
     output_fvec = f'{data_dir}/{model_prefix}_{base_count}_query_vectors_{query_count}.fvec'
-    write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
+    if not os.path.exists(output_fvec):
+        write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
+    else:
+        print(f"File {output_fvec} already exists")
     return output_fvec
 
 
@@ -109,14 +112,20 @@ def generate_query_vectors_fvec(data_dir, input_parquet, base_count, query_count
 def generate_base_vectors_fvec(data_dir, input_parquet, base_count, dimensions, model_prefix):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions)
     output_fvec = f'{data_dir}/{model_prefix}_{base_count}_base_vectors.fvec'
-    write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
+    if not os.path.exists(output_fvec):
+        write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
+    else:
+        print(f"File {output_fvec} already exists")
     return output_fvec
 
 
 def generate_distances_fvec(data_dir, input_parquet, base_count, count, k, model_prefix):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
     output_fvec = f'{data_dir}/{model_prefix}_{base_count}_distances_{count}.fvec'
-    write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', k)
+    if not os.path.exists(output_fvec):
+        write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', k)
+    else:
+        print(f"File {output_fvec} already exists")
     return output_fvec
 
 
@@ -124,7 +133,10 @@ def generate_distances_fvec(data_dir, input_parquet, base_count, count, k, model
 def generate_indices_ivec(data_dir, input_parquet, base_count, query_count, k, model_prefix):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
     output_ivec = f'{data_dir}/{model_prefix}_{base_count}_indices_query_{query_count}.ivec'
-    write_ivec_fvec_from_dataframe(data_dir, output_ivec, df, 'i', k)
+    if not os.path.exists(output_ivec):
+        write_ivec_fvec_from_dataframe(data_dir, output_ivec, df, 'i', k)
+    else:
+        print(f"File {output_ivec} already exists")
     return output_ivec
 
 
@@ -139,19 +151,20 @@ def generate_ivec_fvec_files(data_dir,
                              k, 
                              dimensions):
     model_prefix = get_model_prefix(model_name)
-    
-    query_vector_fvec = generate_query_vectors_fvec(data_dir, query_vectors_parquet, base_count, query_count, dimensions, model_prefix)
-    base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, dimensions, model_prefix)
-    indices_ivec = generate_indices_ivec(data_dir, indices_parquet, base_count, query_count, k, model_prefix)
-    distances_fvec = generate_distances_fvec(data_dir, final_distances_parquet, base_count, query_count, k, model_prefix)
 
     rprint(Markdown("Generated files: "), '')
-    # print counts
-    rprint(Markdown(f"*`{indices_ivec}` - indices count*: `{count_vectors(data_dir, indices_ivec)}` k*: `{len(get_first_vector(data_dir, indices_ivec))}`"))
+    query_vector_fvec = generate_query_vectors_fvec(data_dir, query_vectors_parquet, base_count, query_count, dimensions, model_prefix)
     rprint(Markdown(f"*`{query_vector_fvec}` - query vector count*: `{count_vectors(data_dir, query_vector_fvec)}` dimensions*: `{len(get_first_vector(data_dir, query_vector_fvec))}`"))
-    rprint(Markdown(f"*`{base_vector_fvec}` - base vector count*: `{count_vectors(data_dir, base_vector_fvec)}` dimensions*: `{len(get_first_vector(data_dir, base_vector_fvec))}`"))
-    rprint(Markdown(f"*`{distances_fvec}` - distances count*: `{count_vectors(data_dir, distances_fvec)}` k*: `{len(get_first_vector(data_dir, distances_fvec))}`"))
 
+    base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, dimensions, model_prefix)    
+    rprint(Markdown(f"*`{base_vector_fvec}` - base vector count*: `{count_vectors(data_dir, base_vector_fvec)}` dimensions*: `{len(get_first_vector(data_dir, base_vector_fvec))}`"))
+    
+    indices_ivec = generate_indices_ivec(data_dir, indices_parquet, base_count, query_count, k, model_prefix)
+    rprint(Markdown(f"*`{indices_ivec}` - indices count*: `{count_vectors(data_dir, indices_ivec)}` k*: `{len(get_first_vector(data_dir, indices_ivec))}`"))
+    
+    distances_fvec = generate_distances_fvec(data_dir, final_distances_parquet, base_count, query_count, k, model_prefix)
+    rprint(Markdown(f"*`{distances_fvec}` - distances count*: `{count_vectors(data_dir, distances_fvec)}` k*: `{len(get_first_vector(data_dir, distances_fvec))}`"))
+    
     return query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec
 
 
@@ -225,4 +238,4 @@ if __name__ == "__main__":
     base_vectors_parquet = sys.argv[2]
     base_count = sys.argv[3]
     query_count = sys.argv[4]
-    generate_files(indices_parquet, base_vectors_parquet, base_count, query_count)
+    generate_hdf5_file(indices_parquet, base_vectors_parquet, base_count, query_count)
