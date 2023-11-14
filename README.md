@@ -47,15 +47,15 @@ options:
                         model name to use for generating embeddings, i.e. ada-002, textembedding-gecko, or intfloat/e5-large-v2
   -k K, --k K           number of neighbors to compute per query vector
   -d DATA_DIR, --data_dir DATA_DIR
-                        Directory to store the generated data (default: knn_dataset)
+                        Directory to store the generated datasets (default: ./knn_dataset)
   --skip-zero-vec, --no-skip-zero-vec
-                        Skip generating zero vectors when failing to retrieve the embedding (default: True) (default: True)
+                        Skip generating zero vectors when failing to retrieve the embedding (default: True)
   --use-dataset-api, --no-use-dataset-api
-                        Use 'pyarrow.dataset' API to read the dataset (default: True). Recommended for large datasets. (default: True)
+                        Use 'pyarrow.dataset' API to read the dataset (default: True); recommended for very large datasets (default: True)
   --gen-hdf5, --no-gen-hdf5
-                        Generate hdf5 files (default: True) (default: True)
+                        Generate the hdf5 format file (default: True)
   --post-validation, --no-post-validation
-                        Validate the generated files (default: False) (default: False)
+                        Validate the generated datasets (default: False)
   --enable-memory-tuning
                         Enable memory tuning
   --disable-memory-tuning
