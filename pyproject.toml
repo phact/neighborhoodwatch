@@ -2,7 +2,7 @@
 name = "neighborhoodwatch"
 version = "0.1.0"
 description = ""
-authors = ["phact <estevezsebastian@gmail.com>"]
+authors = ["phact <estevezsebastian@gmail.com>", "yabinmeng <yabinmeng@gmail.com"]
 readme = "README.md"
 packages = [{include = "neighborhoodwatch"}]
 
