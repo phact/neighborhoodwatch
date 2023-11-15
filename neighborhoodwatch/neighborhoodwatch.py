@@ -42,7 +42,7 @@ Some example commands:\n
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('-d', '--data_dir', type=str, default='knn_dataset', help='Directory to store the generated data (default: knn_dataset)')
     parser.add_argument('--skip-zero-vec', action=argparse.BooleanOptionalAction, default=True, help='Skip generating zero vectors when failing to retrieve the embedding (default: True)')
-    parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=True, help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
+    parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=False, help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True, help='Generate hdf5 files (default: True)')
     parser.add_argument('--post-validation', action=argparse.BooleanOptionalAction, default=False, help='Validate the generated files (default: False)')
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
