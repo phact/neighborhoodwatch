@@ -14,7 +14,7 @@ At high level, in order to run this program, the following prerqusites need to b
 * Poetry Python dependency management
 
 An example of setting up a bare-metal environment on an AWS `p3.8xlarge` instance with `Ubuntun 22.04` OS is provided in the following script:
-* [install_bm_env.sh](bash/install_env.sh) 
+* [install_baremetal_env.sh](bash/install_baremetal_env.sh)
 
 For convenience purposes, a [Dockerfile](./Dockerfile) is also provided which allows you to build a docker image allows you to run the `nw` program within a docker container with all the required driver and library dependencies. For more detailed information, please refer to the [nw_docker](./nw_docker.md) document
 
