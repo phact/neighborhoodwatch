@@ -166,8 +166,18 @@ def get_dataset_columns(dataset, n):
     return column_names
 
 
-def compute_knn_ds(data_dir, model_name, query_filename, query_count, base_filename, base_count, dimensions, mem_tune=True, k=100,
-                   initial_batch_size=200000, max_memory_threshold=0.2, split=True):
+def compute_knn_ds(data_dir,
+                   model_name,
+                   dimensions,
+                   query_filename,
+                   query_count,
+                   base_filename,
+                   base_count,
+                   mem_tune=True,
+                   k=100,
+                   initial_batch_size=200000,
+                   max_memory_threshold=0.2,
+                   split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     model_prefix = get_model_prefix(model_name)
@@ -196,6 +206,7 @@ def compute_knn_ds(data_dir, model_name, query_filename, query_count, base_filen
     
     process_dataset_batches(data_dir,
                             model_prefix,
+                            dimensions,
                             base_dataset, 
                             base_column_names,
                             query_dataset,
@@ -218,6 +229,7 @@ def cleanup(*args):
 
 def process_dataset_batches(data_dir,
                             model_prefix,
+                            output_dimension,
                             base_dataset, 
                             base_column_names,
                             query_dataset, 
@@ -271,8 +283,8 @@ def process_dataset_batches(data_dir,
         distances['RowNum'] = range(0, len(distances))
         indices['RowNum'] = range(0, len(indices))
  
-        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_distances{i}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_indices{i}.parquet')
+        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet')
 
         cleanup(base_ds, base_df_numeric, query_ds, query_df_numeric, 
                 distances, indices, distances_q, indices_q, 
@@ -295,4 +307,12 @@ if __name__ == "__main__":
     mem_tune = sys.argv[7] == 'True'
     k = int(sys.argv[8])
 
-    compute_knn_ds('.', model_name, query_filename, query_count, base_filename, base_count, dimensions, True, k)
+    compute_knn_ds('.',
+                   model_name,
+                   dimensions,
+                   query_filename,
+                   query_count,
+                   base_filename,
+                   base_count,
+                   True,
+                   k)
