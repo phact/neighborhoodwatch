@@ -70,5 +70,5 @@ def get_model_prefix(model_name):
     if model_name:
         model_prefix = model_name.replace("/", "_")
     else:
-        model_prefix = "ada_002"
+        model_prefix = "text-embedding-ada-002"
     return model_prefix
