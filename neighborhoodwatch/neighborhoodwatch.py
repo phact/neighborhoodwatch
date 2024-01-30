@@ -40,8 +40,8 @@ Some example commands:\n
     parser.add_argument('base_count', type=int, help="number of base vectors to generate")
     parser.add_argument('-m', '--model_name', type=str,
                         help='model name to use for generating embeddings, i.e. text-embedding-ada-002, textembedding-gecko, or intfloat/e5-large-v2')
-    parser.add_argument('-d', '--dimension_size', type=int,
-                        help='Output dimension size. Only supported in OpenAI text-embedding-3-xxx models (reduced dimension size). Ignored otherwise.')
+    parser.add_argument('-rd', '--reduced_dimension_size', type=int,
+                        help='Reduced (output) dimension size. Only supported in models (e.g. OpenAI text-embedding-3-xxx) that have this feature. Ignored otherwise!')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('--data_dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
@@ -64,7 +64,7 @@ Some example commands:\n
         sys.exit(1)
 
     try:
-        output_dimension = get_embedding_size(args.model_name, args.dimension_size)
+        output_dimension = get_embedding_size(args.model_name, args.reduced_dimension_size)
     except:
         rprint(Markdown(
             f"Unsupported model name ({args.model_name}) or can't determine the dimension size for it. "
@@ -77,7 +77,7 @@ Some example commands:\n
 * query count: `{args.query_count}`\n
 * base vector count: `{args.base_count}`\n
 * model name: `{args.model_name}`\n
-* output dimension size: `{output_dimension} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
+* reduced (output) dimension size: `{output_dimension} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
 --- behavior specification ---\n
 * skip zero vector: `{args.skip_zero_vec}`\n
 * use dataset API: `{args.use_dataset_api}`\n
