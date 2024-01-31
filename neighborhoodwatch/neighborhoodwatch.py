@@ -63,21 +63,13 @@ Some example commands:\n
         rprint(Markdown(f"The specified wikipedia dataset configuration/subset does not exist: {BASE_CONFIG}"))
         sys.exit(1)
 
-    try:
-        output_dimension = get_embedding_size(args.model_name, args.reduced_dimension_size)
-    except:
-        rprint(Markdown(
-            f"Unsupported model name ({args.model_name}) or can't determine the dimension size for it. "
-            f"Please double check the input model name!"))
-        sys.exit(2)
-
     rprint('', Markdown(f"""**Neighborhood Watch** is generating brute force neighbors based on the wikipedia dataset with the following specification:\n
 --- dataset/model specification ---\n
 * source dataset version: `{BASE_DATASET}-{BASE_CONFIG}`\n
 * query count: `{args.query_count}`\n
 * base vector count: `{args.base_count}`\n
 * model name: `{args.model_name}`\n
-* reduced (output) dimension size: `{output_dimension} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
+* reduced (output) dimension size: `{args.reduced_dimension_size} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
 --- behavior specification ---\n
 * skip zero vector: `{args.skip_zero_vec}`\n
 * use dataset API: `{args.use_dataset_api}`\n
@@ -87,10 +79,18 @@ Some example commands:\n
 """))
     rprint('', Markdown("---"))
 
+    try:
+        output_dimension = get_embedding_size(args.model_name, args.reduced_dimension_size)
+    except:
+        rprint(Markdown(
+            f"Unsupported model name ({args.model_name}) or can't determine the dimension size for it. "
+            f"Please double check the input model name!"))
+        sys.exit(2)
+
     if not os.path.exists(args.data_dir):
         os.makedirs(args.data_dir)
 
-    rprint(Markdown("**Generating query dataset** "), '')
+    rprint(Markdown("**Generating query dataset ......** "), '')
     section_time = time.time()
     query_filename = generate_query_dataset(args.data_dir,
                                             args.query_count,
@@ -101,7 +101,7 @@ Some example commands:\n
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    rprint(Markdown("**Generating base dataset** "), '')
+    rprint(Markdown("**Generating base dataset ......** "), '')
     section_time = time.time()
     base_filename = generate_base_dataset(args.data_dir,
                                           query_filename,
@@ -115,7 +115,7 @@ Some example commands:\n
 
     cleanup_partial_parquet()
 
-    rprint(Markdown("**Computing knn** "), '')
+    rprint(Markdown("**Computing knn ......** "), '')
     section_time = time.time()
     if args.use_dataset_api:
         compute_knn_ds(args.data_dir,
@@ -141,7 +141,7 @@ Some example commands:\n
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    rprint(Markdown("**Merging indices and distances** "), '')
+    rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
     merge_indices_and_distances(args.data_dir,
                                 args.model_name,
@@ -153,15 +153,15 @@ Some example commands:\n
 
     model_prefix = get_model_prefix(args.model_name)
 
-    rprint(Markdown("**Generating ivec's and fvec's** "), '')
+    rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
     query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = \
         generate_ivec_fvec_files(args.data_dir,
                                  args.model_name,
                                  output_dimension,
-                                 f"{model_prefix}_{output_dimension}_final_indices.parquet",
                                  base_filename,
                                  query_filename,
+                                 f"{model_prefix}_{output_dimension}_final_indices.parquet",
                                  f"{model_prefix}_{output_dimension}_final_distances.parquet",
                                  args.base_count,
                                  args.query_count,
@@ -171,14 +171,14 @@ Some example commands:\n
     rprint(Markdown("---"), '')
 
     if args.gen_hdf5:
-        rprint(Markdown("**Generating hdf5** "), '')
+        rprint(Markdown("**Generating hdf5 ......** "), '')
         section_time = time.time()
         generate_hdf5_file(args.data_dir,
                            args.model_name,
                            output_dimension,
-                           f"{model_prefix}_{output_dimension}_final_indices.parquet",
                            base_filename,
                            query_filename,
+                           f"{model_prefix}_{output_dimension}_final_indices.parquet",
                            f"{model_prefix}_{output_dimension}_final_distances.parquet",
                            args.base_count,
                            args.query_count,
@@ -191,7 +191,7 @@ Some example commands:\n
         yes_no_str = input(
             "Dataset validation is enabled and it may take a very long time to finish. Do you want to continue? (y/n/yes/no): ")
         if yes_no_str == 'y' or yes_no_str == 'yes':
-            rprint(Markdown("**Validating ivec's and fvec's** "), '')
+            rprint(Markdown("**Validating ivec's and fvec's ......** "), '')
             section_time = time.time()
             validate_files(args.data_dir,
                            query_vector_fvec,

@@ -26,23 +26,23 @@ k = 3
 #       multiple models at the same time
 ##
 # This requires OpenAI API key
-test_openai = False
-ada002_model_name = 'ada-002'
-ada002_dimensions = 1536
+test_openai = True
+openai_model_name = 'text-embedding-3-large'
+openai_dimensions = 1536
 
 # This requiers GCP access token
 test_gcp_gecko = False
 gecko_model_name = 'textembedding-gecko'
 geco_dimensions = 384
 
-test_huggingface = True
+test_huggingface = False
 hf_e5s_model_name = 'intfloat/multilingual-e5-small'
 hf_e5s_dimensions = 384
 
 
 if test_openai:
-    model_name = ada002_model_name
-    dimensions = ada002_dimensions
+    model_name = openai_model_name
+    dimensions = openai_dimensions
 elif test_gcp_gecko:
     model_name = gecko_model_name
     dimensions = geco_dimensions

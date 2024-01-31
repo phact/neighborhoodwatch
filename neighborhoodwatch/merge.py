@@ -28,13 +28,22 @@ def get_file_count(data_dir, model_prefix, dimensions):
     return file_count
 
 
+def read_ifvec_parquet_with_proper_schema(filename):
+    ifvec_table = pq.read_table(filename)
+    rownum_index = ifvec_table.schema.get_field_index('RowNum')
+    if rownum_index != -1:
+        ifvec_table.remove_column(rownum_index)
+
+    return ifvec_table
+
+
 def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
     model_prefix = get_model_prefix(model_name)
 
     file_count = get_file_count(data_dir, model_prefix, output_dimension)
     if file_count > 0:
-        indices_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_indices0.parquet")
-        distances_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_distances0.parquet")
+        indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_indices0.parquet")
+        distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
         batch_count = math.ceil(len(indices_table) / batch_size)
@@ -51,14 +60,8 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
             final_distances = pd.DataFrame()
 
             for i in range(file_count):
-                indices_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet")
-                distances_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet")
-
-                rownum_index = indices_table.schema.get_field_index('RowNum')
-                indices_table = indices_table.remove_column(rownum_index)
-
-                rownum_index = distances_table.schema.get_field_index('RowNum')
-                distances_table = distances_table.remove_column(rownum_index)
+                indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet")
+                distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet")
 
                 if start != batch_count:
                     indices_batch = indices_table.slice(start, batch_size).to_pandas()
@@ -105,12 +108,7 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
 
             # .copy() is required for https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
             final_distances_copy = final_distances.copy()
-            final_distances_copy['RowNum'] = pd.Series(dtype=int)
-            final_distances_copy['RowNum'] = range(start, start + len(final_distances))
-
             final_indices_copy = final_indices.copy()
-            final_indices_copy['RowNum'] = pd.Series(dtype=int)
-            final_indices_copy['RowNum'] = range(start, start + len(final_distances))
 
             final_indices_writer.write_table(pa.Table.from_pandas(final_indices_copy))
             final_distances_writer.write_table(pa.Table.from_pandas(final_distances_copy))

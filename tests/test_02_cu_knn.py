@@ -87,10 +87,10 @@ def test_cu_knn():
     
     compute_knn(test_settings.test_dataset_dir,
                 dummy_model_name,
+                dimensions,
                 f"{dummy_model_name}_{query_vector_filename}", 
                 query_count, 
                 f"{dummy_model_name}_{base_vector_filename}", 
                 base_count, 
-                dimensions, 
-                False, 
+                False,
                 k)

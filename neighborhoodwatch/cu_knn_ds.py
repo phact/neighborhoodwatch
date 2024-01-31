@@ -86,21 +86,21 @@ def tune_memory(dataset, batch_size, max_memory_threshold, rmm, column_names):
     rprint(Markdown(f"Tuning memory settings (num rows: {num_rows}; initial batch size: {batch_size}) ..."))
 
     total_gpu_memory = get_gpu_memory()
-    print("Total memory per GPU:", total_gpu_memory)
+    print("-- total memory per GPU:", total_gpu_memory)
 
     # Measure GPU memory usage after converting to cuDF dataframe
     df = get_df_for_batch(dataset, batch_size, column_names)
     memory_used = df.memory_usage().sum()
-    print(f"dataframe memory_used {memory_used} for a batch size of {batch_size}")
+    print(f"-- dataframe memory_used {memory_used} for a batch size of {batch_size}")
 
     factor = math.ceil((total_gpu_memory * max_memory_threshold) / memory_used)
-    print(f"batch processing adjustment factor (per GPU): {factor}")
+    print(f"-- batch processing adjustment factor (per GPU): {factor}")
     
     batch_size *= factor  # or any other increment factor you find suitable
     while True:
         try:
             if num_rows < batch_size:
-                print(f"The calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
+                print(f"-- the calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
                 batch_size = num_rows
                 break 
     
@@ -110,23 +110,23 @@ def tune_memory(dataset, batch_size, max_memory_threshold, rmm, column_names):
             df = get_df_for_batch(dataset, batch_size, column_names)
             memory_used = df.memory_usage().sum()
 
-            print(f"mm_thresh{max_memory_threshold}")
-            print(f"mem limit {max_memory_threshold*total_gpu_memory}")
-            print(f"mem used {memory_used}")
+            print(f"-- mm_thresh{max_memory_threshold}")
+            print(f"-- mem limit {max_memory_threshold*total_gpu_memory}")
+            print(f"-- mem used {memory_used}")
 
             if memory_used > max_memory_threshold * total_gpu_memory:
                 # If the memory used goes beyond the threshold, break and set the batch size
                 # to the last successful size.
                 batch_size = int(0.8 * batch_size)
-                print(f"found threshold {batch_size}")
+                print(f"-- found threshold {batch_size}")
                 break
             else:
-                print(f"memory used ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
+                print(f"-- memory used ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
                 batch_size *= 1.2
 
         except Exception as e:
             batch_size = int(0.8 * batch_size)
-            print(f"exception {e}, max {batch_size}")
+            print(f"-- exception {e}, max {batch_size}")
             break
     
     return batch_size
@@ -279,9 +279,6 @@ def process_dataset_batches(data_dir,
 
         assert (len(distances) == query_count)
         assert (len(indices) == query_count)
-
-        distances['RowNum'] = range(0, len(distances))
-        indices['RowNum'] = range(0, len(indices))
  
         stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet')
         stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet')

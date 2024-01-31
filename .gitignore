@@ -10,3 +10,4 @@ nw.zip
 *.bkup
 wget-log
 nvidia_cuda/
+neighborhoodwatch/check_hdft_zero.py

@@ -22,7 +22,7 @@ def check_gcp_credentials():
 
 # Check whether the dataset exists remotely
 def check_dataset_exists_remote():
-    configs = get_dataset_config_names(BASE_DATASET)
+    configs = get_dataset_config_names(BASE_DATASET, trust_remote_code=True)
     if BASE_CONFIG in configs:
         return True
     else:
@@ -31,7 +31,7 @@ def check_dataset_exists_remote():
 
 # Programmatically get the embedding size from the model name
 # No need for manual input of the dimensions
-def get_embedding_size(model_name: str, reduced_dimension_size: int):
+def get_embedding_size(model_name: str, reduced_dimension_size):
     # OpenAI embedding models
     if model_name == 'text-embedding-ada-002' or model_name == 'text-embedding-3-small':
         default_model_dimension = 1536
@@ -54,7 +54,9 @@ def get_embedding_size(model_name: str, reduced_dimension_size: int):
     if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':
         if reduced_dimension_size is not None:
             assert (reduced_dimension_size <= default_model_dimension)
-        return min(default_model_dimension, reduced_dimension_size)
+            return min(default_model_dimension, reduced_dimension_size)
+        else:
+            return default_model_dimension
     else:
         return default_model_dimension
 
