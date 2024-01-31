@@ -38,8 +38,7 @@ cuml-cu12 = {url = "https://pypi.nvidia.com/cuml-cu12/cuml_cu12-23.8.0-cp310-cp3
 rich = "^13.6.0"
 spacy = "^3.7.1"
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0.tar.gz" }
-openai = "^0.28.1"
-vertexai = "^0.0.1"
+openai = "^1.10.0"
 google-cloud-aiplatform = "^1.35.0"
 h5py = "^3.10.0"
 #sklearn = "0.0.post7"

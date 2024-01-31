@@ -66,21 +66,21 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
 
     total_gpu_memory = nvidia_smi.nvmlDeviceGetMemoryInfo(handle).total
 
-    print("Total memory:", total_gpu_memory)
+    print("-- total memory:", total_gpu_memory)
 
     nvidia_smi.nvmlShutdown()
 
     # Measure GPU memory usage after converting to cuDF dataframe
     memory_used = df.memory_usage().sum()
-    print(f"memory_used {memory_used}")
+    print(f"-- memory_used {memory_used}")
     factor = math.ceil((total_gpu_memory * .2) / memory_used)
-    print(f"factor {factor}")
+    print(f"-- factor {factor}")
     batch_size *= factor  # or any other increment factor you find suitable
 
     while True:
         try:
             if num_rows < batch_size:
-                print(f"The calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
+                print(f"-- the calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
                 batch_size = num_rows
                 break 
 
@@ -95,15 +95,15 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
                 # If the memory used goes beyond the threshold, break and set the batch size
                 # to the last successful size.
                 batch_size = int(0.8 * batch_size)
-                print(f"found threshold {batch_size}")
+                print(f"-- found threshold {batch_size}")
                 break
             else:
-                print(f"memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
+                print(f"-- memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
                 batch_size *= 1.2
 
         except Exception as e:
             batch_size = int(0.8 * batch_size)
-            print(f"exception {e}, max batch size {batch_size}")
+            print(f"-- exception {e}, max batch size {batch_size}")
             break
 
     return batch_size
@@ -131,15 +131,24 @@ def get_embedding_count(table):
 def prep_table(data_dir, filename, count, n):
     table = load_table(data_dir, filename, 0, count)
     assert get_embedding_count(table) == n, f"Expected {n} embedding columns, got {get_embedding_count(table)} columns."
-    assert len(table) == count, f"Expected {count} rows, got {len(table)} rows."
     column_names = ['text', 'document_id_idx']
     for i in range(n):
         column_names.append(f'embedding_{i}')
     return drop_columns(table, column_names)
 
 
-def compute_knn(data_dir, model_name, query_filename, query_count, base_filename, base_count, dimensions, mem_tune=True, k=100,
-                initial_batch_size=100000, max_memory_threshold=0.1, split=True):
+def compute_knn(data_dir,
+                model_name,
+                dimensions,
+                query_filename,
+                query_count,
+                base_filename,
+                base_count,
+                mem_tune=True,
+                k=100,
+                initial_batch_size=100000,
+                max_memory_threshold=0.1,
+                split=True):
     model_prefix = get_model_prefix(model_name)
 
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
@@ -157,7 +166,7 @@ def compute_knn(data_dir, model_name, query_filename, query_count, base_filename
     batch_count = math.ceil(len(base_table) / batch_size)
     assert(len(base_table) % batch_size == 0) or k <= (len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    process_batches(data_dir, model_prefix, base_table, query_table, batch_count, batch_size, k, split)
+    process_batches(data_dir, model_prefix, dimensions, base_table, query_table, batch_count, batch_size, k, split)
 
 
 def cleanup(*args):
@@ -172,6 +181,7 @@ def cleanup(*args):
 
 def process_batches(data_dir, 
                     model_prefix,
+                    output_dimension,
                     base_table, 
                     query_table, 
                     batch_count, 
@@ -231,27 +241,7 @@ def process_batches(data_dir,
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        distances['RowNum'] = range(0, len(distances))
-        indices['RowNum'] = range(0, len(indices))
-
-        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_indices{start}.parquet')
+        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_distances{start}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_indices{start}.parquet')
 
         cleanup(df_numeric, distances, indices, dataset)
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 8:
-        print("Usage: python cu_knn.py model_name query_filename query_count base_filename base_count dimensions mem_tune k")
-        sys.exit(1)
-
-    model_name = sys.argv[1]
-    query_filename = sys.argv[2]
-    query_count = int(sys.argv[3])
-    base_filename = sys.argv[4]
-    base_count = int(sys.argv[5])
-    dimensions = int(sys.argv[6])
-    mem_tune = sys.argv[7] == 'True'
-    k = int(sys.argv[8])
-
-    compute_knn('.', model_name, query_filename, query_count, base_filename, base_count, dimensions, True, k)
