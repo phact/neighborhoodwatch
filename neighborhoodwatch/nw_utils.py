@@ -1,5 +1,3 @@
-import urllib.request
-import transformers
 from datasets import get_dataset_config_names
 
 BASE_DATASET = "wikipedia"
@@ -29,9 +27,21 @@ def check_dataset_exists_remote():
         return False
 
 
+valid_names = ['text-embedding-ada-002',
+               'text-embedding-3-small',
+               'text-embedding-3-large',
+               'textembedding-gecko',
+               'intfloat/e5-large-v2',
+               'intfloat/e5-base-v2',
+               'intfloat/e5-small-v2',
+               'colbertv2.0']
+
+
 # Programmatically get the embedding size from the model name
 # No need for manual input of the dimensions
-def get_embedding_size(model_name: str, reduced_dimension_size):
+def get_embedding_size(model_name: str, reduced_dimension_size=None):
+    assert model_name in valid_names, f"Unsupported model_name: {model_name}"
+
     # OpenAI embedding models
     if model_name == 'text-embedding-ada-002' or model_name == 'text-embedding-3-small':
         default_model_dimension = 1536
@@ -47,8 +57,6 @@ def get_embedding_size(model_name: str, reduced_dimension_size):
         default_model_dimension = 768
     elif model_name == 'intfloat/e5-small-v2':
         default_model_dimension = 384
-    else:
-        raise f"Unsupported model_name: {model_name}"
 
     # Reduced output dimension only applies to OpenAI latest text embedding models
     if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':

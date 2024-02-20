@@ -1,6 +1,6 @@
 from neighborhoodwatch.generate_dataset import \
     generate_base_dataset, generate_query_dataset, get_embeddings_from_map, VertexAIEmbeddingGenerator, \
-    OpenAIEmbeddingGenerator, DefaultEmbeddingGenerator
+    OpenAIEmbeddingGenerator, IntfloatE5EmbeddingGenerator
 
 import tests.conftest as test_settings
 
@@ -33,7 +33,7 @@ def test_get_embeddings_from_map():
         generator = OpenAIEmbeddingGenerator(model_name=test_settings.model_name, reduced_dimension_size=test_settings.dimensions)
     # Default to Huggingface mode e5-small-v2
     else:
-        generator = DefaultEmbeddingGenerator(model_name=test_settings.model_name)
+        generator = IntfloatE5EmbeddingGenerator(model_name=test_settings.model_name)
 
     response, zero_cnt = get_embeddings_from_map([(0, ['hi there', 'how are you']), (1, ['Im good', 'and you', 'sup'])],
                                              generator)

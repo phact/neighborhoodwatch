@@ -80,7 +80,7 @@ Some example commands:\n
     rprint('', Markdown("---"))
 
     try:
-        output_dimension = get_embedding_size(args.model_name, args.reduced_dimension_size)
+        reduced_dimension = get_embedding_size(args.model_name, args.reduced_dimension_size)
     except:
         rprint(Markdown(
             f"Unsupported model name ({args.model_name}) or can't determine the dimension size for it. "
@@ -95,8 +95,9 @@ Some example commands:\n
     query_filename = generate_query_dataset(args.data_dir,
                                             args.query_count,
                                             args.model_name,
-                                            output_dimension,
+                                            reduced_dimension,
                                             args.skip_zero_vec)
+
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -107,7 +108,7 @@ Some example commands:\n
                                           query_filename,
                                           args.base_count,
                                           args.model_name,
-                                          output_dimension,
+                                          reduced_dimension,
                                           args.skip_zero_vec)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
@@ -120,7 +121,7 @@ Some example commands:\n
     if args.use_dataset_api:
         compute_knn_ds(args.data_dir,
                        args.model_name,
-                       output_dimension,
+                       reduced_dimension,
                        query_filename,
                        args.query_count,
                        base_filename,
@@ -130,7 +131,7 @@ Some example commands:\n
     else:
         compute_knn(args.data_dir,
                     args.model_name,
-                    output_dimension,
+                    reduced_dimension,
                     query_filename,
                     args.query_count,
                     base_filename,
@@ -145,7 +146,7 @@ Some example commands:\n
     section_time = time.time()
     merge_indices_and_distances(args.data_dir,
                                 args.model_name,
-                                output_dimension,
+                                reduced_dimension,
                                 args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
@@ -155,14 +156,14 @@ Some example commands:\n
 
     rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
-    query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = \
+    query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec = \
         generate_ivec_fvec_files(args.data_dir,
                                  args.model_name,
-                                 output_dimension,
+                                 reduced_dimension,
                                  base_filename,
                                  query_filename,
-                                 f"{model_prefix}_{output_dimension}_final_indices.parquet",
-                                 f"{model_prefix}_{output_dimension}_final_distances.parquet",
+                                 f"{model_prefix}_{reduced_dimension}_final_indices_k{args.k}.parquet",
+                                 f"{model_prefix}_{reduced_dimension}_final_distances_k{args.k}.parquet",
                                  args.base_count,
                                  args.query_count,
                                  args.k)
@@ -175,11 +176,11 @@ Some example commands:\n
         section_time = time.time()
         generate_hdf5_file(args.data_dir,
                            args.model_name,
-                           output_dimension,
+                           reduced_dimension,
                            base_filename,
                            query_filename,
-                           f"{model_prefix}_{output_dimension}_final_indices.parquet",
-                           f"{model_prefix}_{output_dimension}_final_distances.parquet",
+                           f"{model_prefix}_{reduced_dimension}_final_indices_k{args.k}.parquet",
+                           f"{model_prefix}_{reduced_dimension}_final_distances_k{args.k}.parquet",
                            args.base_count,
                            args.query_count,
                            args.k)
@@ -195,9 +196,9 @@ Some example commands:\n
             section_time = time.time()
             validate_files(args.data_dir,
                            query_vector_fvec,
+                           base_vector_fvec,
                            indices_ivec,
-                           distances_fvec,
-                           base_vector_fvec)
+                           distances_fvec)
             rprint(Markdown(
                 f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
             rprint(Markdown("---"), '')

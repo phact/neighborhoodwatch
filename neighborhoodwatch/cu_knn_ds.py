@@ -185,12 +185,10 @@ def compute_knn_ds(data_dir,
 
     query_dataset = load_dataset(data_dir, query_filename)
     query_dataset = slice_dataset(query_dataset, 0, query_count)
-    assert get_embedding_count(query_dataset) == dimensions
     query_column_names = get_dataset_columns(query_dataset, dimensions)
     
     base_dataset = load_dataset(data_dir, base_filename)
     base_dataset = slice_dataset(base_dataset, 0, base_count)
-    assert get_embedding_count(base_dataset) == dimensions
     base_column_names = get_dataset_columns(base_dataset, dimensions)
 
     empty_schema = pa.schema([])

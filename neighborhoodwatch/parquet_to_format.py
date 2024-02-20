@@ -98,9 +98,9 @@ def read_and_extract(data_dir, input_parquet, base_count, dimensions):
     return df
 
 
-def generate_query_vectors_fvec(data_dir, input_parquet, base_count, query_count, model_prefix, dimensions):
-    df = read_and_extract(data_dir, input_parquet, base_count, dimensions)
-    output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_{base_count}_query_vectors_{query_count}.fvec'
+def generate_query_vectors_fvec(data_dir, input_parquet, query_count, model_prefix, dimensions):
+    df = read_and_extract(data_dir, input_parquet, query_count, dimensions)
+    output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_query_vectors_{query_count}.fvec'
     if not os.path.exists(output_fvec):
         write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
     else:
@@ -111,7 +111,7 @@ def generate_query_vectors_fvec(data_dir, input_parquet, base_count, query_count
 # Generate base_vectors.fvec file
 def generate_base_vectors_fvec(data_dir, input_parquet, base_count, model_prefix, dimensions):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions)
-    output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_{base_count}_base_vectors.fvec'
+    output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_base_vectors_{base_count}.fvec'
     if not os.path.exists(output_fvec):
         write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
     else:
@@ -119,9 +119,9 @@ def generate_base_vectors_fvec(data_dir, input_parquet, base_count, model_prefix
     return output_fvec
 
 
-def generate_distances_fvec(data_dir, input_parquet, base_count, count, k, model_prefix, dimensions):
+def generate_distances_fvec(data_dir, input_parquet, base_count, query_count, k, model_prefix, dimensions):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
-    output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_{base_count}_distances_{count}.fvec'
+    output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_distances_b{base_count}_q{query_count}_k{k}.fvec'
     if not os.path.exists(output_fvec):
         write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', k)
     else:
@@ -132,7 +132,7 @@ def generate_distances_fvec(data_dir, input_parquet, base_count, count, k, model
 # Generate indices.ivec file
 def generate_indices_ivec(data_dir, input_parquet, base_count, query_count, k, model_prefix, dimensions):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
-    output_ivec = f'{data_dir}/{model_prefix}_{dimensions}_{base_count}_indices_query_{query_count}.ivec'
+    output_ivec = f'{data_dir}/{model_prefix}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}.ivec'
     if not os.path.exists(output_ivec):
         write_ivec_fvec_from_dataframe(data_dir, output_ivec, df, 'i', k)
     else:
@@ -153,12 +153,16 @@ def generate_ivec_fvec_files(data_dir,
                              k):
     model_prefix = get_model_prefix(model_name)
 
-    rprint(Markdown("Generated files: "), '')
-    query_vector_fvec = generate_query_vectors_fvec(data_dir, query_vectors_parquet, base_count, query_count, model_prefix, dimensions)
-    rprint(Markdown(f"*`{query_vector_fvec}`* - query vector count: `{count_vectors(data_dir, query_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, query_vector_fvec))}`"))
+    query_vector_fvec = None
+    if query_vectors_parquet is not None:
+        rprint(Markdown("Generated files: "), '')
+        query_vector_fvec = generate_query_vectors_fvec(data_dir, query_vectors_parquet, query_count, model_prefix, dimensions)
+        rprint(Markdown(f"*`{query_vector_fvec}`* - query vector count: `{count_vectors(data_dir, query_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, query_vector_fvec))}`"))
 
-    base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, model_prefix, dimensions)
-    rprint(Markdown(f"*`{base_vector_fvec}`* - base vector count: `{count_vectors(data_dir, base_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, base_vector_fvec))}`"))
+    base_vector_fvec = None
+    if base_vectors_parquet is not None:
+        base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, model_prefix, dimensions)
+        rprint(Markdown(f"*`{base_vector_fvec}`* - base vector count: `{count_vectors(data_dir, base_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, base_vector_fvec))}`"))
     
     indices_ivec = generate_indices_ivec(data_dir, indices_parquet, base_count, query_count, k, model_prefix, dimensions)
     rprint(Markdown(f"*`{indices_ivec}`* - indices count: `{count_vectors(data_dir, indices_ivec)}`, k: `{len(get_first_vector(data_dir, indices_ivec))}`"))
@@ -166,7 +170,7 @@ def generate_ivec_fvec_files(data_dir,
     distances_fvec = generate_distances_fvec(data_dir, final_distances_parquet, base_count, query_count, k, model_prefix, dimensions)
     rprint(Markdown(f"*`{distances_fvec}`* - distances count: `{count_vectors(data_dir, distances_fvec)}`, k: `{len(get_first_vector(data_dir, distances_fvec))}`"))
     
-    return query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec
+    return query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec
 
 
 def generate_hdf5_file(data_dir,
@@ -181,7 +185,7 @@ def generate_hdf5_file(data_dir,
                        k):
     model_prefix = get_model_prefix(model_name)
 
-    filename = f'{model_prefix}_{dimensions}_base_{base_count}_query_{query_count}.hdf5'
+    filename = f'{model_prefix}_{dimensions}_base_{base_count}_query_{query_count}_k{k}.hdf5'
     filename = get_full_filename(data_dir, filename)
 
     rprint(Markdown(f"Generated file: {filename}"), '')
@@ -210,7 +214,7 @@ def write_hdf5(data_dir, df, filename, datasetname):
             f.create_dataset(datasetname, data=data)
 
 
-def validate_files(data_dir, query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec):
+def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec):
     zero_query_vector_count = 0
     total_query_vector_count = count_vectors(data_dir, query_vector_fvec)
     total_mismatch_count = 0

@@ -1,5 +1,3 @@
-import sys
-
 import cudf
 import pyarrow.parquet as pq
 import cupy as cp
@@ -80,9 +78,10 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
     while True:
         try:
             if num_rows < batch_size:
-                print(f"-- the calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
+                print(
+                    f"-- the calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
                 batch_size = num_rows
-                break 
+                break
 
             rmm.reinitialize(pool_allocator=False)
             batch = table.slice(0, batch_size)
@@ -110,7 +109,8 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
 
 
 def load_table(data_dir, filename, start, end):
-    return pq.read_table(get_full_filename(data_dir,filename)).slice(start, end)
+    # If needed, add "thrift_string_size_limit=1000000000" option to avoid the error of exeeding the thrift string size limit
+    return pq.read_table(get_full_filename(data_dir, filename)).slice(start, end)
 
 
 def drop_columns(table, keep_columns):
@@ -128,18 +128,27 @@ def get_embedding_count(table):
     return len(matching_columns)
 
 
-def prep_table(data_dir, filename, count, n):
+def prep_table(data_dir, filename, count, input_dimension):
     table = load_table(data_dir, filename, 0, count)
-    assert get_embedding_count(table) == n, f"Expected {n} embedding columns, got {get_embedding_count(table)} columns."
-    column_names = ['text', 'document_id_idx']
-    for i in range(n):
+    total_dimensions = sum('embedding_' in c for c in table.column_names)
+    assert total_dimensions >= input_dimension and total_dimensions % input_dimension == 0, \
+        f"Input dimension {input_dimension} does not match the actual dimension {total_dimensions} in the table."
+
+    # Not sure if we really need to keep these 2 columns here
+    # in the "process_batches" function, we only select the float columns as per the following code:
+    # - df_numeric = df.select_dtypes(['float32', 'float64'])
+
+    # column_names = ['text', 'document_id_idx']
+    column_names = []
+    for i in range(total_dimensions):
         column_names.append(f'embedding_{i}')
+
     return drop_columns(table, column_names)
 
 
 def compute_knn(data_dir,
                 model_name,
-                dimensions,
+                input_dimensions,
                 query_filename,
                 query_count,
                 base_filename,
@@ -156,17 +165,28 @@ def compute_knn(data_dir,
     batch_size = initial_batch_size
     # batch_size = 543680
 
-    n = dimensions
-    base_table = prep_table(data_dir, base_filename, base_count, n)
-    query_table = prep_table(data_dir, query_filename, query_count, n)
+    print(f"-- prepare query and base tables for brute-force KNN computation.")
+    query_table, query_dimensions_total = prep_table(data_dir, query_filename, query_count, input_dimensions)
+    # print(f"   query_table -- shape: {query_table.shape}; total embedding columns: {query_dimensions_total}")
+    base_table, base_dimensions_total = prep_table(data_dir, base_filename, base_count, input_dimensions)
+    print(f"   base_table  -- shape: {base_table.shape}; total embedding columns: {base_dimensions_total}")
 
     if mem_tune:
         batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)
 
     batch_count = math.ceil(len(base_table) / batch_size)
-    assert(len(base_table) % batch_size == 0) or k <= (len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
+    assert (len(base_table) % batch_size == 0) or k <= (
+            len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    process_batches(data_dir, model_prefix, dimensions, base_table, query_table, batch_count, batch_size, k, split)
+    process_batches(data_dir,
+                    model_prefix,
+                    input_dimensions,
+                    base_table,
+                    query_table,
+                    batch_count,
+                    batch_size,
+                    k,
+                    split)
 
 
 def cleanup(*args):
@@ -179,23 +199,23 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(data_dir, 
+def process_batches(data_dir,
                     model_prefix,
-                    output_dimension,
-                    base_table, 
-                    query_table, 
-                    batch_count, 
-                    batch_size, 
-                    k, 
+                    input_dimensions,
+                    base_table,
+                    query_table,
+                    batch_count,
+                    batch_size,
+                    k,
                     split):
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
+
         dataset_batch = base_table.slice(batch_offset, batch_length)
-
         df = cudf.DataFrame.from_arrow(dataset_batch)
-        df_numeric = df.select_dtypes(['float32', 'float64'])
 
+        df_numeric = df.select_dtypes(['float32', 'float64'])
         cleanup(df)
 
         dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
@@ -224,8 +244,8 @@ def process_batches(data_dir,
 
                 assert (k <= len(dataset))
 
-                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32), 
-                                                   query.astype(np.float32), 
+                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
+                                                   query.astype(np.float32),
                                                    k)
 
                 distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
@@ -237,11 +257,12 @@ def process_batches(data_dir,
 
             distances.columns = distances.columns.astype(str)
             indices.columns = indices.columns.astype(str)
-        
+
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_indices{start}.parquet')
+        stream_cudf_to_parquet(distances, 100000,
+                               f'{data_dir}/{model_prefix}_{input_dimensions}_distances{start}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{input_dimensions}_indices{start}.parquet')
 
         cleanup(df_numeric, distances, indices, dataset)
