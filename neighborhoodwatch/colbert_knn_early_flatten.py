@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory
 from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
-    is_zero_embedding
+    is_zero_embedding, ParquetStreamer
 from neighborhoodwatch.merge import merge_indices_and_distances
 from neighborhoodwatch.neighborhoodwatch import KeepLineBreaksFormatter
 from neighborhoodwatch.nw_utils import *
@@ -93,14 +93,6 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
         return embeddings
 
 
-def check_src_embed_files_exist(metadata_file, embed_batch_files):
-    batch_count = len(embed_batch_files)
-    all_file_exists = [os.path.exists(embed_batch_files[i]) for i in range(batch_count)]
-    all_file_exists.append(os.path.exists(metadata_file))
-    proceed_further = not all(all_file_exists)
-    return proceed_further
-
-
 def close_files(metadata_file, embed_files):
     if metadata_file is not None:
         metadata_file.close()
@@ -110,25 +102,15 @@ def close_files(metadata_file, embed_files):
             embed_file.close()
 
 
-def process_source_dataset(dataset,
+def process_source_dataset(streamer,
+                           dataset,
                            model_name,
+                           input_dimensions,
                            row_count,
                            column_to_embed,
-                           metadata_filename,
-                           embed_batch_filenames,
-                           batch_size,
+                           mini_embed_filename,
                            skip_zero_vec=True):
-    batch_count = len(embed_batch_filenames)
-    assert batch_count == math.ceil(row_count / batch_size), f"batch_count mismatch: {batch_count} != {math.ceil(row_count / batch_size)}"
-
-    metadata_file = open(metadata_filename, 'w', 1)
-    metadata_file_writer =csv.writer(metadata_file)
-
-    embed_files = []
-    embed_file_writers = []
-    for i in range(batch_count):
-        embed_files.append(open(embed_batch_filenames[i], 'w', 1))
-        embed_file_writers.append(csv.writer(embed_files[i]))
+    embedding_array = []
 
     sentence_batch_size = 10000
     sentence_batch_size = min(sentence_batch_size, row_count)
@@ -185,15 +167,14 @@ def process_source_dataset(dataset,
                             else:
                                 meta_row_array.append(active_rows[index][column])
 
-                        metadata_file_writer.writerow(meta_row_array)
-
-                        current_batch = embedding_counter // batch_size
-                        embed_file_writers[current_batch].writerow(embedding)
+                        embedding_array.append(embedding)
                         embedding_counter += 1
 
                         if (embedding_counter + skipped_zero_embedding_cnt) >= row_count:
-                            close_files(metadata_file, embed_files)
+                            streamer.stream_to_parquet_without_src_metadata(embedding_array)
                             return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
+
+            streamer.stream_to_parquet_without_src_metadata(embedding_array)
 
             i = 0
             active_rows = []
@@ -201,7 +182,6 @@ def process_source_dataset(dataset,
 
         row_counter += 1
 
-    close_files(metadata_file, embed_files)
     return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
 
 
@@ -353,22 +333,22 @@ Some example commands:\n
     section_time = time.time()
     src_query_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
 
-    query_metadata_file = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_query{args.query_count}_src_metadata.csv'
-    query_embed_filename_base = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_query{args.query_count}_src_embed'
-    query_embed_cnt = int(args.query_count)
-    query_embed_files = [f"{query_embed_filename_base}_batch{i}.csv" for i in range(math.ceil(query_embed_cnt / src_data_proc_batch_size))]
-    if check_src_embed_files_exist(query_metadata_file, query_embed_files):
+    mini_embed_columns = [f'mini_embedding_{i}' for i in range(input_dimensions)]
+
+    query_embed_mini_filename = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_query{args.query_count}_src_embed_mini.parquet'
+    query_embed_streamer = ParquetStreamer(query_embed_mini_filename, mini_embed_columns)
+    if not os.path.exists(query_embed_mini_filename):
         query_embed_cnt, query_detected0cnt, query_skipped0cnt = (
-            process_source_dataset(src_query_dataset,
+            process_source_dataset(query_embed_streamer,
+                                   src_query_dataset,
                                    args.model_name,
+                                   input_dimensions,
                                    args.query_count,
                                    "question",
-                                   query_metadata_file,
-                                   query_embed_files,
-                                   src_data_proc_batch_size,
+                                   query_embed_mini_filename,
                                    args.skip_zero_vec))
     else:
-        print(f"All embed batch files already exist, skip processing the query source dataset.\n")
+        print(f"The source query embed file already exists, skip processing the query source dataset.\n")
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
@@ -382,22 +362,20 @@ Some example commands:\n
                                              trust_remote_code=True,
                                              split='train')
 
-    base_metadata_file = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_base{args.base_count}_src_metadata.csv'
-    base_embed_filename_base = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_base{args.base_count}_src_embed'
-    base_embed_cnt = int(args.base_count)
-    base_embed_files = [f"{base_embed_filename_base}_batch{i}.csv" for i in range(math.ceil(base_embed_cnt / src_data_proc_batch_size))]
-    if check_src_embed_files_exist(base_metadata_file, base_embed_files):
+    base_embed_mini_filename = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_base{args.base_count}_src_embed_mini.parquet'
+    base_embed_streamer = ParquetStreamer(query_embed_mini_filename, mini_embed_columns)
+    if not os.path.exists(base_embed_mini_filename):
         base_embed_cnt, base_detected0cnt, base_skipped0cnt = (
-            process_source_dataset(src_base_dataset,
+            process_source_dataset(base_embed_streamer,
+                                   src_base_dataset,
                                    args.model_name,
                                    args.base_count,
+                                   input_dimensions,
                                    "text",
-                                   base_metadata_file,
-                                   base_embed_files,
-                                   src_data_proc_batch_size,
+                                   base_embed_mini_filename,
                                    args.skip_zero_vec))
     else:
-        print(f"All embed batch files already exist, skip processing the base source dataset.\n")
+        print(f"The source base embed file already exists, skip processing the base source dataset.\n")
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
