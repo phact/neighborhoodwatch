@@ -93,15 +93,6 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
         return embeddings
 
 
-def close_files(metadata_file, embed_files):
-    if metadata_file is not None:
-        metadata_file.close()
-
-    for embed_file in embed_files:
-        if embed_file is not None:
-            embed_file.close()
-
-
 def process_source_dataset(streamer,
                            dataset,
                            model_name,
@@ -356,6 +347,7 @@ Some example commands:\n
                                    args.skip_zero_vec))
     else:
         print(f"The source query embed file already exists, skip processing the query source dataset.\n")
+    query_embed_streamer.close()
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
@@ -382,6 +374,7 @@ Some example commands:\n
                                    args.skip_zero_vec))
     else:
         print(f"The source base embed file already exists, skip processing the base source dataset.\n")
+    base_embed_streamer.close()
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
