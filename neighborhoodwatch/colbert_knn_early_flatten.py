@@ -204,25 +204,19 @@ def process_knn_computation(data_dir,
                             model_name,
                             input_dimensions,
                             query_filename,
-                            query_embed_cnt,
                             base_filename,
-                            base_embed_cnt,
-                            batch_size,
-                            mem_tune=True,
+                            mem_tune=False,
                             initial_batch_size=100000,
                             max_memory_threshold=0.1,
                             k=100,
                             split=True):
-    assert (base_embed_cnt % batch_size == 0) or k <= (
-            base_embed_cnt % batch_size), f"Cannot generate k of {k} with only {base_embed_cnt} rows and batch_size of {batch_size}."
-
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
     model_prefix = get_model_prefix(model_name)
 
     print(f"-- prepare query source table for brute-force KNN computation.")
-    query_table = prep_table(data_dir, query_filename, query_embed_cnt, input_dimensions)
+    query_table = pq.read_table(get_full_filename(data_dir, query_filename))
     print(f"-- prepare base source table for brute-force KNN computation.")
-    base_table = prep_table(data_dir, base_filename, base_embed_cnt, input_dimensions)
+    base_table = pq.read_table(get_full_filename(data_dir, base_filename))
 
     batch_size = initial_batch_size
     if mem_tune:
@@ -398,11 +392,9 @@ Some example commands:\n
                             args.model_name,
                             input_dimensions,
                             query_embed_mini_filename,
-                            query_embed_cnt,
                             base_embed_mini_filename,
-                            base_embed_cnt,
-                            args.enable_memory_tuning,
-                            args.k)
+                            mem_tune=args.enable_memory_tuning,
+                            k=args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
