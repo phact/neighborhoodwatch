@@ -164,13 +164,15 @@ def process_source_dataset(streamer,
 
                         for mini_embedding in mini_embedding_list:
                             embedding_array.append(mini_embedding)
-                            embedding_counter += 1
+                        embedding_counter += 1
 
                         if (embedding_counter + skipped_zero_embedding_cnt) >= row_count:
-                            streamer.stream_to_parquet_without_src_metadata(embedding_array)
+                            if len(embedding_array) > 0:
+                                streamer.stream_to_parquet_without_src_metadata(embedding_array)
                             return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
 
-            streamer.stream_to_parquet_without_src_metadata(embedding_array)
+            if len(embedding_array) > 0:
+                streamer.stream_to_parquet_without_src_metadata(embedding_array)
 
             i = 0
             active_rows = []
@@ -206,8 +208,10 @@ def process_knn_computation(data_dir,
 
     print(f"-- prepare query source table for brute-force KNN computation.")
     query_table = pq.read_table(get_full_filename(data_dir, query_filename))
+    print(f"   query_table.shape: {query_table.shape}")
     print(f"-- prepare base source table for brute-force KNN computation.")
     base_table = pq.read_table(get_full_filename(data_dir, base_filename))
+    print(f"   base_table.shape: {base_table.shape}")
 
     batch_size = initial_batch_size
     if mem_tune:
