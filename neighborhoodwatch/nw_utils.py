@@ -40,8 +40,6 @@ valid_names = ['text-embedding-ada-002',
 # Programmatically get the embedding size from the model name
 # No need for manual input of the dimensions
 def get_embedding_size(model_name: str, reduced_dimension_size=None):
-    assert model_name in valid_names, f"Unsupported model_name: {model_name}"
-
     # OpenAI embedding models
     if model_name == 'text-embedding-ada-002' or model_name == 'text-embedding-3-small':
         default_model_dimension = 1536
@@ -57,6 +55,10 @@ def get_embedding_size(model_name: str, reduced_dimension_size=None):
         default_model_dimension = 768
     elif model_name == 'intfloat/e5-small-v2':
         default_model_dimension = 384
+    elif model_name == 'colbertv2.0':
+        default_model_dimension = 128
+    else:
+        raise ValueError(f"Unsupported model_name: {model_name}")
 
     # Reduced output dimension only applies to OpenAI latest text embedding models
     if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':

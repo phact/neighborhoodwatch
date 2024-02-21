@@ -321,6 +321,23 @@ class ParquetStreamer:
 
         self.writer.write_table(table)
 
+    def stream_to_parquet_without_src_metadata(self, embedding_array):
+        assert len(self.columns) == embedding_array.shape[1]
+
+        embedding_array = np.array(embedding_array)
+
+        columns_list = []
+        for i, column in enumerate(embedding_array.T):
+            columns_list.append(pd.DataFrame(column.astype('float32'), columns=self.columns[i]))
+
+        df = pd.concat(columns_list, axis=1)
+        table = pa.Table.from_pandas(df)
+
+        if self.writer is None:
+            self.writer = pq.ParquetWriter(self.filename, table.schema)
+
+        self.writer.write_table(table)
+
     def close(self):
         if self.writer:
             self.writer.close()
