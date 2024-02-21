@@ -21,7 +21,7 @@ from pathlib import Path
 from torch import Tensor
 from tqdm import tqdm
 
-from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory
+from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory, prep_table
 from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
     is_zero_embedding, ParquetStreamer
 from neighborhoodwatch.merge import merge_indices_and_distances
@@ -108,7 +108,6 @@ def process_source_dataset(streamer,
                            input_dimensions,
                            row_count,
                            column_to_embed,
-                           mini_embed_filename,
                            skip_zero_vec=True):
     embedding_array = []
 
@@ -149,6 +148,9 @@ def process_source_dataset(streamer,
 
                 # for idx, embedding in tqdm(enumerate(embedding_list)):
                 for idx, embedding in enumerate(embedding_list):
+                    assert len(embedding) % input_dimensions == 0, \
+                        f"embedding dimension length {len(embedding)} is not a multiple of mini embedding size {input_dimensions}"
+
                     if skip_zero_vec and is_zero_embedding(embedding):
                         skipped_zero_embedding_cnt += 1
                     else:
@@ -167,8 +169,11 @@ def process_source_dataset(streamer,
                             else:
                                 meta_row_array.append(active_rows[index][column])
 
-                        embedding_array.append(embedding)
-                        embedding_counter += 1
+                        mini_embedding_list = [embedding[i * input_dimensions:(i + 1) * input_dimensions] for i in range((len(embedding) + input_dimensions - 1) // input_dimensions)]
+
+                        for mini_embedding in mini_embedding_list:
+                            embedding_array.append(mini_embedding)
+                            embedding_counter += 1
 
                         if (embedding_counter + skipped_zero_embedding_cnt) >= row_count:
                             streamer.stream_to_parquet_without_src_metadata(embedding_array)
@@ -185,24 +190,6 @@ def process_source_dataset(streamer,
     return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
 
 
-def flatten_wide_table(input_data_arr,
-                       input_dimensions):
-    flattened_data_arr = []
-    mini_embed_columns = [f'mini_embedding_{i}' for i in range(input_dimensions)]
-
-    for i in tqdm(range(len(input_data_arr))):
-        embed_row = input_data_arr[i]
-        mini_vec_num = len(embed_row) // input_dimensions
-        for j in tqdm(range(mini_vec_num)):
-            mini_embed = embed_row[j * input_dimensions: (j + 1) * input_dimensions]
-            flattened_data_arr.append(mini_embed)
-
-    flattened_data_arr = np.array(flattened_data_arr, dtype=np.float32)
-    df = cudf.DataFrame(flattened_data_arr, columns=mini_embed_columns)
-
-    return df
-
-
 def read_embed_arr_from_file(embed_file):
     embed_arr = []
     csv_file_reader = csv.reader(embed_file)
@@ -216,11 +203,14 @@ def read_embed_arr_from_file(embed_file):
 def process_knn_computation(data_dir,
                             model_name,
                             input_dimensions,
-                            query_embed_files,
+                            query_filename,
                             query_embed_cnt,
-                            base_embed_files,
+                            base_filename,
                             base_embed_cnt,
                             batch_size,
+                            mem_tune=True,
+                            initial_batch_size=100000,
+                            max_memory_threshold=0.1,
                             k=100,
                             split=True):
     assert (base_embed_cnt % batch_size == 0) or k <= (
@@ -229,52 +219,77 @@ def process_knn_computation(data_dir,
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
     model_prefix = get_model_prefix(model_name)
 
-    query_src_batch_count = len(query_embed_files)
-    base_src_batch_count = len(base_embed_files)
+    print(f"-- prepare query source table for brute-force KNN computation.")
+    query_table = prep_table(data_dir, query_filename, query_embed_cnt, input_dimensions)
+    print(f"-- prepare base source table for brute-force KNN computation.")
+    base_table = prep_table(data_dir, base_filename, base_embed_cnt, input_dimensions)
 
-    for base_start in tqdm(range(base_src_batch_count)):
-        batch_offset = base_start * batch_size
+    batch_size = initial_batch_size
+    if mem_tune:
+        batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)
 
-        base_embed_file = open(base_embed_files[base_start], 'r')
-        base_src_embed_arr = read_embed_arr_from_file(base_embed_file)
-        base_df_flat = flatten_wide_table(base_src_embed_arr, input_dimensions)
-        base_dataset = cp.from_dlpack(base_df_flat.to_dlpack()).copy(order='C')
-        base_embed_file.close()
+    batch_count = math.ceil(len(base_table) / batch_size)
+    assert (len(base_table) % batch_size == 0) or k <= (
+            len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-        cleanup(base_df_flat, base_src_embed_arr)
+    for start in tqdm(range(0, batch_count)):
+        batch_offset = start * batch_size
+        batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
+
+        dataset_batch = base_table.slice(batch_offset, batch_length)
+        df = cudf.DataFrame.from_arrow(dataset_batch)
+
+        df_numeric = df.select_dtypes(['float32', 'float64'])
+        cleanup(df)
+
+        dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
+
+        # Split the DataFrame into parts (floor division)
+        # TODO: pull out this variable
+        # split_factor = 50
+        split_factor = 1
+        splits = split_factor * batch_count
+        rows_per_split = len(query_table) // splits
 
         distances = cudf.DataFrame()
         indices = cudf.DataFrame()
-        for query_start in tqdm(range(query_src_batch_count)):
-            query_embed_file = open(query_embed_files[query_start], 'r')
-            query_src_embed_arr = read_embed_arr_from_file(query_embed_file)
-            query_df_flat = flatten_wide_table(query_src_embed_arr, input_dimensions)
-            query_dataset = cp.from_dlpack(query_df_flat.to_dlpack()).copy(order='C')
-            query_embed_file.close()
+        if split:
+            for i in tqdm(range(splits)):
+                offset = i * rows_per_split
+                length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
-            cleanup(query_df_flat, query_src_embed_arr)
+                query_batch = query_table.slice(offset, length)
 
-            assert (k <= len(base_dataset))
-            cupydistances1, cupyindices1 = knn(base_dataset.astype(np.float32),
-                                               query_dataset.astype(np.float32),
-                                               k)
+                df1 = cudf.DataFrame.from_arrow(query_batch)
+                df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
-            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
-            # add batch_offset to indices
-            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+                cleanup(df1)
+                query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
 
-            distances = cudf.concat([distances, distances1], ignore_index=True)
-            indices = cudf.concat([indices, indices1], ignore_index=True)
+                assert (k <= len(dataset))
 
-        distances.columns = distances.columns.astype(str)
-        indices.columns = indices.columns.astype(str)
+                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
+                                                   query.astype(np.float32),
+                                                   k)
 
-        chunk_size = 10000
-        stream_cudf_to_parquet(distances, chunk_size,
-                           f'{data_dir}/{model_prefix}_{input_dimensions}_distances{base_start}.parquet')
-        stream_cudf_to_parquet(indices, chunk_size, f'{data_dir}/{model_prefix}_{input_dimensions}_indices{base_start}.parquet')
+                distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
+                # add batch_offset to indices
+                indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
 
-        cleanup(distances, indices, base_dataset)
+                distances = cudf.concat([distances, distances1], ignore_index=True)
+                indices = cudf.concat([indices, indices1], ignore_index=True)
+
+            distances.columns = distances.columns.astype(str)
+            indices.columns = indices.columns.astype(str)
+
+        assert (len(distances) == len(query_table))
+        assert (len(indices) == len(query_table))
+
+        stream_cudf_to_parquet(distances, 100000,
+                               f'{data_dir}/{model_prefix}_{input_dimensions}_distances{start}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{input_dimensions}_indices{start}.parquet')
+
+        cleanup(df_numeric, distances, indices, dataset)
 
 
 def main():
@@ -326,7 +341,6 @@ Some example commands:\n
         os.makedirs(args.data_dir)
 
     input_dimensions = get_embedding_size(args.model_name)
-    src_data_proc_batch_size = int(args.query_count)
 
     rprint('', Markdown("---"))
     rprint(Markdown("**Generating query dataset with embeddings ......** "), '')
@@ -345,7 +359,6 @@ Some example commands:\n
                                    input_dimensions,
                                    args.query_count,
                                    "question",
-                                   query_embed_mini_filename,
                                    args.skip_zero_vec))
     else:
         print(f"The source query embed file already exists, skip processing the query source dataset.\n")
@@ -363,16 +376,15 @@ Some example commands:\n
                                              split='train')
 
     base_embed_mini_filename = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_base{args.base_count}_src_embed_mini.parquet'
-    base_embed_streamer = ParquetStreamer(query_embed_mini_filename, mini_embed_columns)
+    base_embed_streamer = ParquetStreamer(base_embed_mini_filename, mini_embed_columns)
     if not os.path.exists(base_embed_mini_filename):
         base_embed_cnt, base_detected0cnt, base_skipped0cnt = (
             process_source_dataset(base_embed_streamer,
                                    src_base_dataset,
                                    args.model_name,
-                                   args.base_count,
                                    input_dimensions,
+                                   args.base_count,
                                    "text",
-                                   base_embed_mini_filename,
                                    args.skip_zero_vec))
     else:
         print(f"The source base embed file already exists, skip processing the base source dataset.\n")
@@ -385,13 +397,12 @@ Some example commands:\n
     process_knn_computation(args.data_dir,
                             args.model_name,
                             input_dimensions,
-                            query_embed_files,
+                            query_embed_mini_filename,
                             query_embed_cnt,
-                            base_embed_files,
+                            base_embed_mini_filename,
                             base_embed_cnt,
-                            batch_size=src_data_proc_batch_size,
-                            k=args.k,
-                            split=True)
+                            args.enable_memory_tuning,
+                            args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 

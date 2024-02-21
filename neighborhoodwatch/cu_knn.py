@@ -165,11 +165,10 @@ def compute_knn(data_dir,
     batch_size = initial_batch_size
     # batch_size = 543680
 
-    print(f"-- prepare query and base tables for brute-force KNN computation.")
-    query_table, query_dimensions_total = prep_table(data_dir, query_filename, query_count, input_dimensions)
-    # print(f"   query_table -- shape: {query_table.shape}; total embedding columns: {query_dimensions_total}")
-    base_table, base_dimensions_total = prep_table(data_dir, base_filename, base_count, input_dimensions)
-    print(f"   base_table  -- shape: {base_table.shape}; total embedding columns: {base_dimensions_total}")
+    print(f"-- prepare query source table for brute-force KNN computation.")
+    query_table = prep_table(data_dir, query_filename, query_count, input_dimensions)
+    print(f"-- prepare base source table for brute-force KNN computation.")
+    base_table = prep_table(data_dir, base_filename, base_count, input_dimensions)
 
     if mem_tune:
         batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)

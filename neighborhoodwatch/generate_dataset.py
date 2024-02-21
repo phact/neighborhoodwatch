@@ -322,15 +322,10 @@ class ParquetStreamer:
         self.writer.write_table(table)
 
     def stream_to_parquet_without_src_metadata(self, embedding_array):
-        assert len(self.columns) == embedding_array.shape[1]
+        assert len(self.columns) == len(embedding_array[0]), f"column count mismatch: {len(self.columns)} != {len(embedding_array[0])}"
 
         embedding_array = np.array(embedding_array)
-
-        columns_list = []
-        for i, column in enumerate(embedding_array.T):
-            columns_list.append(pd.DataFrame(column.astype('float32'), columns=self.columns[i]))
-
-        df = pd.concat(columns_list, axis=1)
+        df = pd.DataFrame(embedding_array.astype('float32'), columns=self.columns)
         table = pa.Table.from_pandas(df)
 
         if self.writer is None:
