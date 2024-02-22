@@ -170,7 +170,7 @@ def get_batch_embeddings_from_generator(text_list, generator):
 
 def get_embeddings_from_map(text_map, generator):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
-    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences,generator)
+    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator)
     if zero_embedding_cnt > 0:
         print(f"   [warn] failed to get total {zero_embedding_cnt} embeddings!")
 

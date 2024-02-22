@@ -36,7 +36,6 @@ from colbert.indexing.collection_encoder import CollectionEncoder
 
 from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files
 
-
 pa.jemalloc_set_decay_ms(0)
 
 
@@ -103,92 +102,83 @@ def process_source_dataset(streamer,
                            input_dimensions,
                            row_count,
                            column_to_embed,
-                           skip_zero_vec=True):
-    sentence_batch_size = 10000
-    sentence_batch_size = min(sentence_batch_size, row_count)
+                           skip_zero_vec=True,
+                           remove_duplicates=False):
+    row_batch_size = min(row_count, 2000)
+    mini_embedding_output_batch_size = 10000
 
     embedding_counter = 0
     mini_embedding_counter = 0
     detected_zero_embedding_cnt = 0
     skipped_zero_embedding_cnt = 0
 
-    i = 0
-    row_counter = 0
-    sentence_batch_counter = 0
+    cur_row = 0
+    total_sentence_cnt_in_batch = 0
+    total_sentence_cnt = 0
+    total_duplicate_removed_cnt = 0
+
     text_map = []
-    active_rows = []
     embedding_array = []
 
+    if model_name == "colbertv2.0":
+        generator = ColbertPreTrainedEmbeddingGenerator()
+    else:
+        assert False, f"Unsupported model name: {model_name}"
+
     for row in dataset:
-        if row_counter >= row_count:
+        if cur_row >= row_count:
             break
 
-        last_row = row_counter == len(dataset) - 1
-        active_rows.append(row)
+        cur_row += 1
+
+        last_row = (cur_row == len(dataset) - 1)
         sentence_list = split_into_sentences(row[column_to_embed])
-        sentence_batch_counter += len(sentence_list)
-        text_map.append([i, sentence_list])
+        text_map.append([cur_row, sentence_list])
+        total_sentence_cnt_in_batch += len(sentence_list)
+        total_sentence_cnt += len(sentence_list)
 
-        i += 1
-        if sentence_batch_counter >= sentence_batch_size or last_row:
-            sentence_batch_counter = 0
-
-            if model_name == "colbertv2.0":
-                generator = ColbertPreTrainedEmbeddingGenerator()
-            else:
-                assert False, f"Unsupported model name: {model_name}"
-
+        if cur_row % row_batch_size == 0 or last_row:
             embedding_tuple_list, detected_zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
+            text_map.clear()
+            total_sentence_cnt_in_batch = 0
 
             # for embedding_tuple in tqdm(embedding_tuple_list):
             for embedding_tuple in embedding_tuple_list:
-                index = embedding_tuple[0]
                 embedding_list = embedding_tuple[1]
 
-                # for idx, embedding in tqdm(enumerate(embedding_list)):
-                for idx, embedding in enumerate(embedding_list):
+                for embedding in embedding_list:
                     assert len(embedding) % input_dimensions == 0, \
                         f"embedding dimension length {len(embedding)} is not a multiple of mini embedding size {input_dimensions}"
 
                     if skip_zero_vec and is_zero_embedding(embedding):
                         skipped_zero_embedding_cnt += 1
                     else:
-                        meta_row_array = []
-                        for column in dataset.column_names:
-                            if column == "title":
-                                # replace spaces with _
-                                # title_column_value = dataset[column][index].as_py()
-                                title_column_value = active_rows[index][column]
-                                # assert dataset[column][index] == active_rows[index][column], f"index mismatch {dataset[column][index]} != {row[column]}"
-                                meta_row_array.append(title_column_value.replace("_", " "))
-                            elif column == column_to_embed:
-                                assert text_map[index][0] == index, f"index mismatch {text_map[0][0]} != {index}"
-                                value = text_map[index][1][idx]
-                                meta_row_array.append(value)
-                            else:
-                                meta_row_array.append(active_rows[index][column])
-
-                        mini_embedding_list = [embedding[i * input_dimensions:(i + 1) * input_dimensions] for i in range((len(embedding) + input_dimensions - 1) // input_dimensions)]
+                        mini_embedding_list = [embedding[i * input_dimensions:(i + 1) * input_dimensions] for i in
+                                               range((len(embedding) + input_dimensions - 1) // input_dimensions)]
 
                         for mini_embedding in mini_embedding_list:
                             embedding_array.append(mini_embedding)
                             mini_embedding_counter += 1
 
-                            if (mini_embedding_counter % 100000 == 0) and len(embedding_array) > 0:
+                            if (mini_embedding_counter % mini_embedding_output_batch_size == 0) and len(embedding_array) > 0:
+                                cnt1 = len(embedding_array)
+                                if remove_duplicates:
+                                    embedding_array = list(set(map(tuple, embedding_array)))
+                                cnt2 = len(embedding_array)
+                                total_duplicate_removed_cnt += (cnt1 - cnt2)
                                 streamer.stream_to_parquet_without_src_metadata(embedding_array)
                                 embedding_array.clear()
 
                         embedding_counter += 1
 
-            i = 0
-            active_rows = []
-            text_map = []
-
-        row_counter += 1
-
     if len(embedding_array) > 0:
         streamer.stream_to_parquet_without_src_metadata(embedding_array)
         embedding_array.clear()
+
+    print(f"-- got {embedding_counter} raw embeddings ({mini_embedding_counter} mini-embeddings) for total {row_count} rows with {total_sentence_cnt} sentences.")
+    print(f"   detected {detected_zero_embedding_cnt} zero embeddings (skip_zero_vec: {skip_zero_vec}/{skipped_zero_embedding_cnt}).")
+    if remove_duplicates:
+        print(f"   removed total {total_duplicate_removed_cnt} duplicate mini-embeddings.")
 
     return embedding_counter, mini_embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
 
@@ -350,8 +340,8 @@ Some example commands:\n
                                    input_dimensions,
                                    args.query_count,
                                    "question",
-                                   args.skip_zero_vec))
-        print(f"  query_embed_cnt: {query_embed_cnt}, query_embed_cnt_mini: {query_embed_cnt_mini}, query_detected0cnt: {query_detected0cnt}, query_skipped0cnt: {query_skipped0cnt}")
+                                   skip_zero_vec=args.skip_zero_vec,
+                                   remove_duplicates=False))
     else:
         print(f"The source query embed file already exists, skip processing the query source dataset.\n")
 
@@ -379,8 +369,8 @@ Some example commands:\n
                                    input_dimensions,
                                    args.base_count,
                                    "text",
-                                   args.skip_zero_vec))
-        print(f"  base_embed_cnt: {base_embed_cnt}, base_embed_cnt_mini: {base_embed_cnt_mini}, base_detected0cnt: {base_detected0cnt}, base_skipped0cnt: {base_skipped0cnt}")
+                                   skip_zero_vec=args.skip_zero_vec,
+                                   remove_duplicates=False))
     else:
         print(f"The source base embed file already exists, skip processing the base source dataset.\n")
     base_embed_streamer.close()
