@@ -4,10 +4,11 @@ import datasets
 import tarfile
 import csv
 import cudf
-import pyarrow.parquet as pq
 import cupy as cp
 from tqdm import tqdm
+import pyarrow as pa
 import pandas as pd
+import pyarrow.parquet as pq
 import os
 import sys
 import time
@@ -34,6 +35,9 @@ from colbert.modeling.checkpoint import Checkpoint
 from colbert.indexing.collection_encoder import CollectionEncoder
 
 from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files
+
+
+pa.jemalloc_set_decay_ms(0)
 
 
 class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
@@ -100,12 +104,11 @@ def process_source_dataset(streamer,
                            row_count,
                            column_to_embed,
                            skip_zero_vec=True):
-    embedding_array = []
-
     sentence_batch_size = 10000
     sentence_batch_size = min(sentence_batch_size, row_count)
 
     embedding_counter = 0
+    mini_embedding_counter = 0
     detected_zero_embedding_cnt = 0
     skipped_zero_embedding_cnt = 0
 
@@ -114,7 +117,12 @@ def process_source_dataset(streamer,
     sentence_batch_counter = 0
     text_map = []
     active_rows = []
-    for row in tqdm(dataset):
+    embedding_array = []
+
+    for row in dataset:
+        if row_counter >= row_count:
+            break
+
         last_row = row_counter == len(dataset) - 1
         active_rows.append(row)
         sentence_list = split_into_sentences(row[column_to_embed])
@@ -164,15 +172,13 @@ def process_source_dataset(streamer,
 
                         for mini_embedding in mini_embedding_list:
                             embedding_array.append(mini_embedding)
-                        embedding_counter += 1
+                            mini_embedding_counter += 1
 
-                        if (embedding_counter + skipped_zero_embedding_cnt) >= row_count:
-                            if len(embedding_array) > 0:
+                            if (mini_embedding_counter % 100000 == 0) and len(embedding_array) > 0:
                                 streamer.stream_to_parquet_without_src_metadata(embedding_array)
-                            return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
+                                embedding_array.clear()
 
-            if len(embedding_array) > 0:
-                streamer.stream_to_parquet_without_src_metadata(embedding_array)
+                        embedding_counter += 1
 
             i = 0
             active_rows = []
@@ -180,17 +186,11 @@ def process_source_dataset(streamer,
 
         row_counter += 1
 
-    return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
+    if len(embedding_array) > 0:
+        streamer.stream_to_parquet_without_src_metadata(embedding_array)
+        embedding_array.clear()
 
-
-def read_embed_arr_from_file(embed_file):
-    embed_arr = []
-    csv_file_reader = csv.reader(embed_file)
-    for row in tqdm(csv_file_reader):
-        row_arr = np.array(row, dtype=np.float32)
-        embed_arr.append(row_arr)
-
-    return embed_arr
+    return embedding_counter, mini_embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
 
 
 def process_knn_computation(data_dir,
@@ -221,7 +221,8 @@ def process_knn_computation(data_dir,
     assert (len(base_table) % batch_size == 0) or k <= (
             len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    for start in tqdm(range(0, batch_count)):
+    # for start in tqdm(range(0, batch_count)):
+    for start in range(0, batch_count):
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
 
@@ -243,7 +244,8 @@ def process_knn_computation(data_dir,
         distances = cudf.DataFrame()
         indices = cudf.DataFrame()
         if split:
-            for i in tqdm(range(splits)):
+            # for i in tqdm(range(splits)):
+            for i in range(splits):
                 offset = i * rows_per_split
                 length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
@@ -341,7 +343,7 @@ Some example commands:\n
     query_embed_mini_filename = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_query{args.query_count}_src_embed_mini.parquet'
     query_embed_streamer = ParquetStreamer(query_embed_mini_filename, mini_embed_columns)
     if not os.path.exists(query_embed_mini_filename):
-        query_embed_cnt, query_detected0cnt, query_skipped0cnt = (
+        query_embed_cnt, query_embed_cnt_mini, query_detected0cnt, query_skipped0cnt = (
             process_source_dataset(query_embed_streamer,
                                    src_query_dataset,
                                    args.model_name,
@@ -349,8 +351,10 @@ Some example commands:\n
                                    args.query_count,
                                    "question",
                                    args.skip_zero_vec))
+        print(f"  query_embed_cnt: {query_embed_cnt}, query_embed_cnt_mini: {query_embed_cnt_mini}, query_detected0cnt: {query_detected0cnt}, query_skipped0cnt: {query_skipped0cnt}")
     else:
         print(f"The source query embed file already exists, skip processing the query source dataset.\n")
+
     query_embed_streamer.close()
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
@@ -368,7 +372,7 @@ Some example commands:\n
     base_embed_mini_filename = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_base{args.base_count}_src_embed_mini.parquet'
     base_embed_streamer = ParquetStreamer(base_embed_mini_filename, mini_embed_columns)
     if not os.path.exists(base_embed_mini_filename):
-        base_embed_cnt, base_detected0cnt, base_skipped0cnt = (
+        base_embed_cnt, base_embed_cnt_mini, base_detected0cnt, base_skipped0cnt = (
             process_source_dataset(base_embed_streamer,
                                    src_base_dataset,
                                    args.model_name,
@@ -376,6 +380,7 @@ Some example commands:\n
                                    args.base_count,
                                    "text",
                                    args.skip_zero_vec))
+        print(f"  base_embed_cnt: {base_embed_cnt}, base_embed_cnt_mini: {base_embed_cnt_mini}, base_detected0cnt: {base_detected0cnt}, base_skipped0cnt: {base_skipped0cnt}")
     else:
         print(f"The source base embed file already exists, skip processing the base source dataset.\n")
     base_embed_streamer.close()
