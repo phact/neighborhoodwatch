@@ -4,10 +4,11 @@ import datasets
 import tarfile
 import csv
 import cudf
-import pyarrow.parquet as pq
 import cupy as cp
 from tqdm import tqdm
+import pyarrow as pa
 import pandas as pd
+import pyarrow.parquet as pq
 import os
 import sys
 import time
@@ -21,9 +22,9 @@ from pathlib import Path
 from torch import Tensor
 from tqdm import tqdm
 
-from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory
+from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory, prep_table
 from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
-    is_zero_embedding
+    is_zero_embedding, ParquetStreamer
 from neighborhoodwatch.merge import merge_indices_and_distances
 from neighborhoodwatch.neighborhoodwatch import KeepLineBreaksFormatter
 from neighborhoodwatch.nw_utils import *
@@ -35,13 +36,15 @@ from colbert.indexing.collection_encoder import CollectionEncoder
 
 from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files
 
+pa.jemalloc_set_decay_ms(0)
+
 
 class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
     def __init__(self, model_name="colbertv2.0", download_pretrained_model=False):
-        # - In Colbert model, each input text token (NOTE not input text itself) corresponds to a "mini" vector
+        # - In Colbert model, each input text token (NOTE not input text itself) corresponds to a "token" vector
         #   with a smaller dimension size (e.g. 128). The total "dimension" size of the entire input text is
         #   not fixed (depending on the tokens of the input text).
-        # - The number here refers to the "mini" dimension size.
+        # - The number here refers to the "token" dimension size.
         super().__init__(model_name, 128, 256)
 
         self.local_model_base_dir = f".pretrained"
@@ -85,7 +88,7 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
         embeddings = []
         for t in text:
             # For each input text, the returned embedding is an 2-dimensional array with shape like <changing_num>x128,
-            # aka, it contains a series of mini-vectors of the size 128.
+            # aka, it contains a series of token-vectors of the size 128.
             tensor_embeddings, token_cnt = self.encoder.encode_passages(text)
             np_embed = Tensor.numpy(tensor_embeddings)
             embeddings.append(np_embed.flatten())
@@ -93,208 +96,222 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
         return embeddings
 
 
-def check_src_embed_files_exist(metadata_file, embed_batch_files):
-    batch_count = len(embed_batch_files)
-    all_file_exists = [os.path.exists(embed_batch_files[i]) for i in range(batch_count)]
-    all_file_exists.append(os.path.exists(metadata_file))
-    proceed_further = not all(all_file_exists)
-    return proceed_further
-
-
-def close_files(metadata_file, embed_files):
-    if metadata_file is not None:
-        metadata_file.close()
-
-    for embed_file in embed_files:
-        if embed_file is not None:
-            embed_file.close()
-
-
-def process_source_dataset(dataset,
+def process_source_dataset(streamer,
+                           dataset,
                            model_name,
+                           input_dimensions,
                            row_count,
+                           token_count,
                            column_to_embed,
-                           metadata_filename,
-                           embed_batch_filenames,
-                           batch_size,
-                           skip_zero_vec=True):
-    batch_count = len(embed_batch_filenames)
-    assert batch_count == math.ceil(row_count / batch_size), f"batch_count mismatch: {batch_count} != {math.ceil(row_count / batch_size)}"
-
-    metadata_file = open(metadata_filename, 'w', 1)
-    metadata_file_writer =csv.writer(metadata_file)
-
-    embed_files = []
-    embed_file_writers = []
-    for i in range(batch_count):
-        embed_files.append(open(embed_batch_filenames[i], 'w', 1))
-        embed_file_writers.append(csv.writer(embed_files[i]))
-
-    sentence_batch_size = 10000
-    sentence_batch_size = min(sentence_batch_size, row_count)
+                           skip_zero_vec=True,
+                           remove_duplicates=False):
+    row_batch_size = min(row_count, 2000)
+    token_embedding_output_batch_size = 10000
 
     embedding_counter = 0
+    token_embedding_counter = 0
     detected_zero_embedding_cnt = 0
     skipped_zero_embedding_cnt = 0
 
-    i = 0
-    row_counter = 0
-    sentence_batch_counter = 0
+    cur_row = 0
+    total_sentence_cnt_in_batch = 0
+    total_sentence_cnt = 0
+    total_duplicate_removed_cnt = 0
+
     text_map = []
-    active_rows = []
-    for row in tqdm(dataset):
-        last_row = row_counter == len(dataset) - 1
-        active_rows.append(row)
+    embedding_array = []
+
+    if model_name == "colbertv2.0":
+        generator = ColbertPreTrainedEmbeddingGenerator()
+    else:
+        assert False, f"Unsupported model name: {model_name}"
+
+    def break_out_of_loop():
+        return cur_row >= row_count or token_embedding_counter >= token_count
+
+    for row in dataset:
+        if break_out_of_loop():
+            break
+
+        cur_row += 1
+
+        last_row = (cur_row == len(dataset) - 1)
         sentence_list = split_into_sentences(row[column_to_embed])
-        sentence_batch_counter += len(sentence_list)
-        text_map.append([i, sentence_list])
+        text_map.append([cur_row, sentence_list])
+        total_sentence_cnt_in_batch += len(sentence_list)
+        total_sentence_cnt += len(sentence_list)
 
-        i += 1
-        if sentence_batch_counter >= sentence_batch_size or last_row:
-            sentence_batch_counter = 0
+        embedding_tuple_list, detected_zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
+        text_map.clear()
+        total_sentence_cnt_in_batch = 0
 
-            if model_name == "colbertv2.0":
-                generator = ColbertPreTrainedEmbeddingGenerator()
-            else:
-                assert False, f"Unsupported model name: {model_name}"
+        # for embedding_tuple in tqdm(embedding_tuple_list):
+        for embedding_tuple in embedding_tuple_list:
+            embedding_list = embedding_tuple[1]
 
-            embedding_tuple_list, detected_zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
+            for embedding in embedding_list:
+                assert len(embedding) % input_dimensions == 0, \
+                    f"embedding dimension length {len(embedding)} is not a multiple of token embedding size {input_dimensions}"
 
-            # for embedding_tuple in tqdm(embedding_tuple_list):
-            for embedding_tuple in embedding_tuple_list:
-                index = embedding_tuple[0]
-                embedding_list = embedding_tuple[1]
+                if skip_zero_vec and is_zero_embedding(embedding):
+                    skipped_zero_embedding_cnt += 1
+                else:
+                    token_embedding_list = [embedding[i * input_dimensions:(i + 1) * input_dimensions] for i in
+                                           range((len(embedding) + input_dimensions - 1) // input_dimensions)]
 
-                # for idx, embedding in tqdm(enumerate(embedding_list)):
-                for idx, embedding in enumerate(embedding_list):
-                    if skip_zero_vec and is_zero_embedding(embedding):
-                        skipped_zero_embedding_cnt += 1
-                    else:
-                        meta_row_array = []
-                        for column in dataset.column_names:
-                            if column == "title":
-                                # replace spaces with _
-                                # title_column_value = dataset[column][index].as_py()
-                                title_column_value = active_rows[index][column]
-                                # assert dataset[column][index] == active_rows[index][column], f"index mismatch {dataset[column][index]} != {row[column]}"
-                                meta_row_array.append(title_column_value.replace("_", " "))
-                            elif column == column_to_embed:
-                                assert text_map[index][0] == index, f"index mismatch {text_map[0][0]} != {index}"
-                                value = text_map[index][1][idx]
-                                meta_row_array.append(value)
-                            else:
-                                meta_row_array.append(active_rows[index][column])
+                    embedding_counter += 1
+                    for token_embedding in token_embedding_list:
+                        embedding_array.append(token_embedding)
+                        token_embedding_counter += 1
 
-                        metadata_file_writer.writerow(meta_row_array)
+                        if (token_embedding_counter % token_embedding_output_batch_size == 0) and len(embedding_array) > 0:
+                            cnt1 = len(embedding_array)
+                            if remove_duplicates:
+                                embedding_array = list(set(map(tuple, embedding_array)))
+                            cnt2 = len(embedding_array)
+                            total_duplicate_removed_cnt += (cnt1 - cnt2)
+                            streamer.stream_to_parquet_without_src_metadata(embedding_array)
+                            embedding_array.clear()
 
-                        current_batch = embedding_counter // batch_size
-                        embed_file_writers[current_batch].writerow(embedding)
-                        embedding_counter += 1
+                        if break_out_of_loop():
+                            break
 
-                        if (embedding_counter + skipped_zero_embedding_cnt) >= row_count:
-                            close_files(metadata_file, embed_files)
-                            return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
+                if break_out_of_loop():
+                    break
 
-            i = 0
-            active_rows = []
-            text_map = []
+            if break_out_of_loop():
+                break
 
-        row_counter += 1
+    if len(embedding_array) > 0:
+        streamer.stream_to_parquet_without_src_metadata(embedding_array)
+        embedding_array.clear()
 
-    close_files(metadata_file, embed_files)
-    return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
-
-
-def flatten_wide_table(input_data_arr,
-                       input_dimensions):
-    flattened_data_arr = []
-    mini_embed_columns = [f'mini_embedding_{i}' for i in range(input_dimensions)]
-
-    for i in tqdm(range(len(input_data_arr))):
-        embed_row = input_data_arr[i]
-        mini_vec_num = len(embed_row) // input_dimensions
-        for j in tqdm(range(mini_vec_num)):
-            mini_embed = embed_row[j * input_dimensions: (j + 1) * input_dimensions]
-            flattened_data_arr.append(mini_embed)
-
-    flattened_data_arr = np.array(flattened_data_arr, dtype=np.float32)
-    df = cudf.DataFrame(flattened_data_arr, columns=mini_embed_columns)
-
-    return df
-
-
-def read_embed_arr_from_file(embed_file):
-    embed_arr = []
-    csv_file_reader = csv.reader(embed_file)
-    for row in tqdm(csv_file_reader):
-        row_arr = np.array(row, dtype=np.float32)
-        embed_arr.append(row_arr)
-
-    return embed_arr
+    return (cur_row,
+            embedding_counter,
+            token_embedding_counter,
+            detected_zero_embedding_cnt,
+            skipped_zero_embedding_cnt,
+            total_sentence_cnt,
+            total_duplicate_removed_cnt)
 
 
 def process_knn_computation(data_dir,
                             model_name,
                             input_dimensions,
-                            query_embed_files,
-                            query_embed_cnt,
-                            base_embed_files,
-                            base_embed_cnt,
-                            batch_size,
+                            query_filename,
+                            base_filename,
+                            mem_tune=False,
+                            initial_batch_size=1000000,
+                            max_memory_threshold=0.1,
                             k=100,
                             split=True):
-    assert (base_embed_cnt % batch_size == 0) or k <= (
-            base_embed_cnt % batch_size), f"Cannot generate k of {k} with only {base_embed_cnt} rows and batch_size of {batch_size}."
-
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
     model_prefix = get_model_prefix(model_name)
 
-    query_src_batch_count = len(query_embed_files)
-    base_src_batch_count = len(base_embed_files)
+    print(f"-- prepare query source table for brute-force KNN computation.")
+    query_table = pq.read_table(get_full_filename(data_dir, query_filename))
+    print(f"   query_table.shape: {query_table.shape}")
+    print(f"-- prepare base source table for brute-force KNN computation.")
+    base_table = pq.read_table(get_full_filename(data_dir, base_filename))
+    print(f"   base_table.shape: {base_table.shape}")
 
-    for base_start in tqdm(range(base_src_batch_count)):
-        batch_offset = base_start * batch_size
+    batch_size = initial_batch_size
+    if mem_tune:
+        batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)
 
-        base_embed_file = open(base_embed_files[base_start], 'r')
-        base_src_embed_arr = read_embed_arr_from_file(base_embed_file)
-        base_df_flat = flatten_wide_table(base_src_embed_arr, input_dimensions)
-        base_dataset = cp.from_dlpack(base_df_flat.to_dlpack()).copy(order='C')
-        base_embed_file.close()
+    batch_count = math.ceil(len(base_table) / batch_size)
+    assert (len(base_table) % batch_size == 0) or k <= (
+            len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-        cleanup(base_df_flat, base_src_embed_arr)
+    # for start in tqdm(range(0, batch_count)):
+    for start in range(0, batch_count):
+        batch_offset = start * batch_size
+        batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
+
+        dataset_batch = base_table.slice(batch_offset, batch_length)
+        df = cudf.DataFrame.from_arrow(dataset_batch)
+
+        df_numeric = df.select_dtypes(['float32', 'float64'])
+        cleanup(df)
+
+        dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
+
+        # Split the DataFrame into parts (floor division)
+        # TODO: pull out this variable
+        # split_factor = 50
+        split_factor = 1
+        splits = split_factor * batch_count
+        rows_per_split = len(query_table) // splits
 
         distances = cudf.DataFrame()
         indices = cudf.DataFrame()
-        for query_start in tqdm(range(query_src_batch_count)):
-            query_embed_file = open(query_embed_files[query_start], 'r')
-            query_src_embed_arr = read_embed_arr_from_file(query_embed_file)
-            query_df_flat = flatten_wide_table(query_src_embed_arr, input_dimensions)
-            query_dataset = cp.from_dlpack(query_df_flat.to_dlpack()).copy(order='C')
-            query_embed_file.close()
+        if split:
+            # for i in tqdm(range(splits)):
+            for i in range(splits):
+                offset = i * rows_per_split
+                length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
-            cleanup(query_df_flat, query_src_embed_arr)
+                query_batch = query_table.slice(offset, length)
 
-            assert (k <= len(base_dataset))
-            cupydistances1, cupyindices1 = knn(base_dataset.astype(np.float32),
-                                               query_dataset.astype(np.float32),
-                                               k)
+                df1 = cudf.DataFrame.from_arrow(query_batch)
+                df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
-            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
-            # add batch_offset to indices
-            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+                cleanup(df1)
+                query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
 
-            distances = cudf.concat([distances, distances1], ignore_index=True)
-            indices = cudf.concat([indices, indices1], ignore_index=True)
+                assert (k <= len(dataset))
 
-        distances.columns = distances.columns.astype(str)
-        indices.columns = indices.columns.astype(str)
+                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
+                                                   query.astype(np.float32),
+                                                   k)
 
-        chunk_size = 10000
-        stream_cudf_to_parquet(distances, chunk_size,
-                           f'{data_dir}/{model_prefix}_{input_dimensions}_distances{base_start}.parquet')
-        stream_cudf_to_parquet(indices, chunk_size, f'{data_dir}/{model_prefix}_{input_dimensions}_indices{base_start}.parquet')
+                distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
+                # add batch_offset to indices
+                indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
 
-        cleanup(distances, indices, base_dataset)
+                distances = cudf.concat([distances, distances1], ignore_index=True)
+                indices = cudf.concat([indices, indices1], ignore_index=True)
+
+            distances.columns = distances.columns.astype(str)
+            indices.columns = indices.columns.astype(str)
+
+        assert (len(distances) == len(query_table))
+        assert (len(indices) == len(query_table))
+
+        stream_cudf_to_parquet(distances, 1000000,
+                               f'{data_dir}/{model_prefix}_{input_dimensions}_distances{start}.parquet')
+        stream_cudf_to_parquet(indices, 1000000, f'{data_dir}/{model_prefix}_{input_dimensions}_indices{start}.parquet')
+
+        cleanup(df_numeric, distances, indices, dataset)
+
+
+def print_dataset_info(source_dataset_name,
+                       row_count,
+                       token_count,
+                       actual_row_cnt,
+                       actual_sentence_cnt,
+                       actual_embedding_counter,
+                       actual_token_embedding_counter,
+                       detected_zero_embedding_cnt,
+                       skip_zero_vec,
+                       skipped_zero_embedding_cnt,
+                       remove_duplicates,
+                       duplicate_removed_cnt):
+    print(f"=================================================")
+    print(f"== '{source_dataset_name}' source dataset stats")
+    print(f"== ----------------------------------------------")
+    print(f"== Expected total count of source data rows: {row_count}")
+    print(f"== Expected total count of source data tokens: {token_count}")
+    print(f"== Total count of source data rows: {actual_row_cnt}")
+    print(f"== Total count of sentences: {actual_sentence_cnt}")
+    print(f"== Total count of sentence-embeddings: {actual_embedding_counter}")
+    print(f"== Total count of token-embeddings: {actual_token_embedding_counter}")
+    print(f"== Total count of detected zero sentence-embeddings: {detected_zero_embedding_cnt}")
+    if skip_zero_vec:
+        print(f"== Total count of skipped zero sentence-embeddings: {skipped_zero_embedding_cnt}")
+    if remove_duplicates:
+        print(f"== Total count of duplicate token_embeddings removed: {duplicate_removed_cnt}")
+    print(f"=================================================")
 
 
 def main():
@@ -304,10 +321,12 @@ def main():
         description="""ck (Colbert KNN) uses GPU acceleration to generate ground truth KNN datasets with Colbert embeddings.""",
         epilog="""
 Some example commands:\n
-    ck 1000 10000 -k 100 --disable-memory-tuning
+    ckef 1000 10000 100000 1000000 -k 100 --disable-memory-tuning
         """, formatter_class=KeepLineBreaksFormatter)
     parser.add_argument('query_count', type=int, help="number of query vectors to generate")
     parser.add_argument('base_count', type=int, help="number of base vectors to generate")
+    parser.add_argument('query_token_count', type=int, help="number of query token vectors to generate")
+    parser.add_argument('base_token_count', type=int, help="number of base token vectors to generate")
     parser.add_argument('-m', '--model_name', type=str, default="Colbertv2.0",
                         help='Colbert model name (default: Colbertv2.0)')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
@@ -334,6 +353,8 @@ Some example commands:\n
 * source dataset version: `{BASE_DATASET}-{BASE_CONFIG}`\n
 * query count: `{args.query_count}`\n
 * base vector count: `{args.base_count}`\n
+* query token vector count: `{args.query_token_count}`\n
+* base token vector count: `{args.base_token_count}`\n
 * model name: `{args.model_name}`\n
 --- behavior specification ---\n
 * skip zero vector: `{args.skip_zero_vec}`\n
@@ -342,35 +363,58 @@ Some example commands:\n
 * enable memory tuning: `{args.enable_memory_tuning}`
 """))
 
-    if not os.path.exists(args.data_dir):
-        os.makedirs(args.data_dir)
+    model_prefix = get_model_prefix(args.model_name)
+    data_dir = f"{args.data_dir}/{model_prefix}/q{args.query_count}_qk{args.query_token_count}_b{args.base_count}_bk{args.base_token_count}_k{args.k}"
+    if not os.path.exists(data_dir):
+        os.makedirs(data_dir)
 
     input_dimensions = get_embedding_size(args.model_name)
-    src_data_proc_batch_size = int(args.query_count)
 
     rprint('', Markdown("---"))
     rprint(Markdown("**Generating query dataset with embeddings ......** "), '')
     section_time = time.time()
     src_query_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
 
-    query_metadata_file = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_query{args.query_count}_src_metadata.csv'
-    query_embed_filename_base = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_query{args.query_count}_src_embed'
-    query_embed_cnt = int(args.query_count)
-    query_embed_files = [f"{query_embed_filename_base}_batch{i}.csv" for i in range(math.ceil(query_embed_cnt / src_data_proc_batch_size))]
-    if check_src_embed_files_exist(query_metadata_file, query_embed_files):
-        query_embed_cnt, query_detected0cnt, query_skipped0cnt = (
-            process_source_dataset(src_query_dataset,
+    token_embed_columns = [f'token_embedding_{i}' for i in range(input_dimensions)]
+
+    query_embed_token_filename = f'{data_dir}/{model_prefix}_{input_dimensions}_query{args.query_count}_src_embed_token.parquet'
+    query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
+    query_remove_duplicates = False
+    query_print_info = True
+    if not os.path.exists(query_embed_token_filename):
+        (query_row_cnt, query_embed_cnt, query_embed_cnt_token, query_detected0cnt,
+         query_skipped0cnt, query_sentence_cnt, query_duplicate_cnt) = (
+            process_source_dataset(query_embed_streamer,
+                                   src_query_dataset,
                                    args.model_name,
+                                   input_dimensions,
                                    args.query_count,
+                                   args.query_token_count,
                                    "question",
-                                   query_metadata_file,
-                                   query_embed_files,
-                                   src_data_proc_batch_size,
-                                   args.skip_zero_vec))
+                                   skip_zero_vec=args.skip_zero_vec,
+                                   remove_duplicates=query_remove_duplicates))
     else:
-        print(f"All embed batch files already exist, skip processing the query source dataset.\n")
+        query_print_info = False
+        print(f"The source query embed file already exists, skip processing the query source dataset.\n")
+
+    query_embed_streamer.close()
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
+
+    if query_print_info:
+        print("\n")
+        print_dataset_info("query",
+                           args.query_count,
+                           args.query_token_count,
+                           query_row_cnt,
+                           query_sentence_cnt,
+                           query_embed_cnt,
+                           query_embed_cnt_token,
+                           query_detected0cnt,
+                           args.skip_zero_vec,
+                           query_skipped0cnt,
+                           False,
+                           query_duplicate_cnt)
 
     rprint(Markdown("---"), '')
     rprint(Markdown("**Generating base dataset with embeddings ......** "), '')
@@ -382,54 +426,71 @@ Some example commands:\n
                                              trust_remote_code=True,
                                              split='train')
 
-    base_metadata_file = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_base{args.base_count}_src_metadata.csv'
-    base_embed_filename_base = f'{args.data_dir}/{args.model_name.replace("/", "_")}_{input_dimensions}_base{args.base_count}_src_embed'
-    base_embed_cnt = int(args.base_count)
-    base_embed_files = [f"{base_embed_filename_base}_batch{i}.csv" for i in range(math.ceil(base_embed_cnt / src_data_proc_batch_size))]
-    if check_src_embed_files_exist(base_metadata_file, base_embed_files):
-        base_embed_cnt, base_detected0cnt, base_skipped0cnt = (
-            process_source_dataset(src_base_dataset,
+    base_embed_token_filename = f'{data_dir}/{model_prefix}_{input_dimensions}_base{args.base_count}_src_embed_token.parquet'
+    base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
+    base_remove_duplicates = False
+    base_print_info = True
+    if not os.path.exists(base_embed_token_filename):
+        (base_row_cnt, base_embed_cnt, base_embed_cnt_token, base_detected0cnt,
+         base_skipped0cnt, base_sentence_cnt, base_duplicate_cnt) = (
+            process_source_dataset(base_embed_streamer,
+                                   src_base_dataset,
                                    args.model_name,
+                                   input_dimensions,
                                    args.base_count,
+                                   args.base_token_count,
                                    "text",
-                                   base_metadata_file,
-                                   base_embed_files,
-                                   src_data_proc_batch_size,
-                                   args.skip_zero_vec))
+                                   skip_zero_vec=args.skip_zero_vec,
+                                   remove_duplicates=base_remove_duplicates))
     else:
-        print(f"All embed batch files already exist, skip processing the base source dataset.\n")
+        base_print_info = False
+        print(f"The source base embed file already exists, skip processing the base source dataset.\n")
+
+    base_embed_streamer.close()
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
+
+    if base_print_info:
+        print("\n")
+        print_dataset_info("base",
+                           args.base_count,
+                           args.base_token_count,
+                           base_row_cnt,
+                           base_sentence_cnt,
+                           base_embed_cnt,
+                           base_embed_cnt_token,
+                           base_detected0cnt,
+                           args.skip_zero_vec,
+                           base_skipped0cnt,
+                           False,
+                           base_duplicate_cnt)
+    print("\n")
 
     rprint(Markdown("---"), '')
     rprint(Markdown("**Computing knn ......** "), '')
     section_time = time.time()
-    process_knn_computation(args.data_dir,
+    process_knn_computation(data_dir,
                             args.model_name,
                             input_dimensions,
-                            query_embed_files,
-                            query_embed_cnt,
-                            base_embed_files,
-                            base_embed_cnt,
-                            batch_size=src_data_proc_batch_size,
-                            k=args.k,
-                            split=True)
+                            query_embed_token_filename,
+                            base_embed_token_filename,
+                            mem_tune=args.enable_memory_tuning,
+                            k=args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
     rprint(Markdown("---"), '')
     rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
-    merge_indices_and_distances(args.data_dir, args.model_name, get_embedding_size(args.model_name), args.k)
+    merge_indices_and_distances(data_dir, args.model_name, get_embedding_size(args.model_name), args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
     rprint(Markdown("---"), '')
     rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
-    model_prefix = get_model_prefix(args.model_name)
     section_time = time.time()
     query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec = \
-        generate_ivec_fvec_files(args.data_dir, args.model_name, input_dimensions,
+        generate_ivec_fvec_files(data_dir, args.model_name, input_dimensions,
                                  None, None,
                                  f"{model_prefix}_{input_dimensions}_final_indices_k{args.k}.parquet",
                                  f"{model_prefix}_{input_dimensions}_final_distances_k{args.k}.parquet",

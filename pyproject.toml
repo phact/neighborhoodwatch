@@ -57,4 +57,3 @@ build-backend = "poetry.core.masonry.api"
 [tool.poetry.scripts]
 nw = "neighborhoodwatch.neighborhoodwatch:main"
 ck = "neighborhoodwatch.colbert_knn:main"
-ckef = "neighborhoodwatch.colbert_knn_early_flatten:main"
