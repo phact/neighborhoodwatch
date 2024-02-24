@@ -58,7 +58,7 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
     * text-embedding-3-large - default dimension size: 3072 (support reduced output dimension size)
     """
 
-    def __init__(self, dimensions, model_name='text-embedding-ada-002', reduced_dimension_size=1536):
+    def __init__(self, model_name='text-embedding-ada-002', reduced_dimension_size=1536):
         assert (model_name == "text-embedding-ada-002" or
                 model_name == "text-embedding-3-small" or
                 model_name == "text-embedding-3-large")
@@ -339,9 +339,8 @@ class ParquetStreamer:
             print(f"Finished streaming to {self.filename}")
 
 
-def generate_query_dataset(data_dir, row_count, model_name, output_dimension, skip_zero_vec=True):
-    source = "query_vector"
-    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_{source}_data_{row_count}.parquet'
+def generate_query_dataset(data_dir, model_name, row_count, output_dimension, skip_zero_vec=True):
+    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_query_vector_data_{row_count}.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -369,13 +368,12 @@ def generate_query_dataset(data_dir, row_count, model_name, output_dimension, sk
     return filename
 
 
-def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name, output_dimension, skip_zero_vec=True):
+def generate_base_dataset(data_dir, model_name, query_vector_filename, row_count, output_dimension, skip_zero_vec=True):
     processed_count = 0
     detected_zero_count = 0
     skipped_zero_count = 0
 
-    source = "base_vector"
-    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_{source}_data_{row_count}.parquet'
+    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_base_vector_data_{row_count}.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")

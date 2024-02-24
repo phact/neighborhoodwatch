@@ -167,20 +167,21 @@ def get_dataset_columns(dataset, n):
 
 
 def compute_knn_ds(data_dir,
-                   model_name,
+                   model_prefix,
                    dimensions,
                    query_filename,
                    query_count,
                    base_filename,
                    base_count,
-                   mem_tune=True,
+                   final_indecies_filename,
+                   final_distances_filename,
+                   mem_tune=False,
                    k=100,
                    initial_batch_size=200000,
                    max_memory_threshold=0.2,
                    split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
-    model_prefix = get_model_prefix(model_name)
     batch_size = initial_batch_size
 
     query_dataset = load_dataset(data_dir, query_filename)
@@ -205,6 +206,8 @@ def compute_knn_ds(data_dir,
     process_dataset_batches(data_dir,
                             model_prefix,
                             dimensions,
+                            final_indecies_filename,
+                            final_distances_filename,
                             base_dataset, 
                             base_column_names,
                             query_dataset,
@@ -228,6 +231,8 @@ def cleanup(*args):
 def process_dataset_batches(data_dir,
                             model_prefix,
                             output_dimension,
+                            final_indecies_filename,
+                            final_distances_filename,
                             base_dataset, 
                             base_column_names,
                             query_dataset, 
@@ -278,36 +283,11 @@ def process_dataset_batches(data_dir,
         assert (len(distances) == query_count)
         assert (len(indices) == query_count)
  
-        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet')
+        stream_cudf_to_parquet(distances, 100000, final_distances_filename)
+        stream_cudf_to_parquet(indices, 100000, final_indecies_filename)
 
         cleanup(base_ds, base_df_numeric, query_ds, query_df_numeric, 
                 distances, indices, distances_q, indices_q, 
                 base_batch, query_batch)
         
         i += 1
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 8:
-        print("Usage: python cu_knn.py model_name query_filename query_count base_filename base_count dimensions mem_tune k")
-        sys.exit(1)
-
-    model_name = sys.argv[1]
-    query_filename = sys.argv[2]
-    query_count = int(sys.argv[3])
-    base_filename = sys.argv[4]
-    base_count = int(sys.argv[5])
-    dimensions = int(sys.argv[6])
-    mem_tune = sys.argv[7] == 'True'
-    k = int(sys.argv[8])
-
-    compute_knn_ds('.',
-                   model_name,
-                   dimensions,
-                   query_filename,
-                   query_count,
-                   base_filename,
-                   base_count,
-                   True,
-                   k)

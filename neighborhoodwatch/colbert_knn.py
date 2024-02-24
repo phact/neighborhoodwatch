@@ -34,7 +34,7 @@ from colbert.infra.config import ColBERTConfig
 from colbert.modeling.checkpoint import Checkpoint
 from colbert.indexing.collection_encoder import CollectionEncoder
 
-from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files
+from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file
 
 pa.jemalloc_set_decay_ms(0)
 
@@ -105,7 +105,6 @@ def process_source_dataset(streamer,
                            column_to_embed,
                            skip_zero_vec=True,
                            remove_duplicates=False):
-    row_batch_size = min(row_count, 2000)
     token_embedding_output_batch_size = 10000
 
     embedding_counter = 0
@@ -114,7 +113,6 @@ def process_source_dataset(streamer,
     skipped_zero_embedding_cnt = 0
 
     cur_row = 0
-    total_sentence_cnt_in_batch = 0
     total_sentence_cnt = 0
     total_duplicate_removed_cnt = 0
 
@@ -135,15 +133,13 @@ def process_source_dataset(streamer,
 
         cur_row += 1
 
-        last_row = (cur_row == len(dataset) - 1)
         sentence_list = split_into_sentences(row[column_to_embed])
         text_map.append([cur_row, sentence_list])
-        total_sentence_cnt_in_batch += len(sentence_list)
         total_sentence_cnt += len(sentence_list)
 
         embedding_tuple_list, detected_zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
         text_map.clear()
-        total_sentence_cnt_in_batch = 0
+
 
         # for embedding_tuple in tqdm(embedding_tuple_list):
         for embedding_tuple in embedding_tuple_list:
@@ -157,7 +153,7 @@ def process_source_dataset(streamer,
                     skipped_zero_embedding_cnt += 1
                 else:
                     token_embedding_list = [embedding[i * input_dimensions:(i + 1) * input_dimensions] for i in
-                                           range((len(embedding) + input_dimensions - 1) // input_dimensions)]
+                                            range((len(embedding) + input_dimensions - 1) // input_dimensions)]
 
                     embedding_counter += 1
                     for token_embedding in token_embedding_list:
@@ -168,8 +164,10 @@ def process_source_dataset(streamer,
                             cnt1 = len(embedding_array)
                             if remove_duplicates:
                                 embedding_array = list(set(map(tuple, embedding_array)))
-                            cnt2 = len(embedding_array)
-                            total_duplicate_removed_cnt += (cnt1 - cnt2)
+                                cnt2 = len(embedding_array)
+                                total_duplicate_removed_cnt += (cnt1 - cnt2)
+                                token_embedding_counter -= (cnt1 - cnt2)
+
                             streamer.stream_to_parquet_without_src_metadata(embedding_array)
                             embedding_array.clear()
 
@@ -195,24 +193,22 @@ def process_source_dataset(streamer,
             total_duplicate_removed_cnt)
 
 
-def process_knn_computation(data_dir,
-                            model_name,
-                            input_dimensions,
+def process_knn_computation(base_filename,
                             query_filename,
-                            base_filename,
+                            final_indices_filename,
+                            final_distances_filename,
                             mem_tune=False,
                             initial_batch_size=1000000,
                             max_memory_threshold=0.1,
                             k=100,
                             split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
-    model_prefix = get_model_prefix(model_name)
 
     print(f"-- prepare query source table for brute-force KNN computation.")
-    query_table = pq.read_table(get_full_filename(data_dir, query_filename))
+    query_table = pq.read_table(query_filename)
     print(f"   query_table.shape: {query_table.shape}")
     print(f"-- prepare base source table for brute-force KNN computation.")
-    base_table = pq.read_table(get_full_filename(data_dir, base_filename))
+    base_table = pq.read_table(base_filename)
     print(f"   base_table.shape: {base_table.shape}")
 
     batch_size = initial_batch_size
@@ -278,9 +274,8 @@ def process_knn_computation(data_dir,
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        stream_cudf_to_parquet(distances, 1000000,
-                               f'{data_dir}/{model_prefix}_{input_dimensions}_distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 1000000, f'{data_dir}/{model_prefix}_{input_dimensions}_indices{start}.parquet')
+        stream_cudf_to_parquet(distances, 1000000, final_indices_filename)
+        stream_cudf_to_parquet(indices, 1000000, final_distances_filename)
 
         cleanup(df_numeric, distances, indices, dataset)
 
@@ -330,7 +325,7 @@ Some example commands:\n
     parser.add_argument('-m', '--model_name', type=str, default="Colbertv2.0",
                         help='Colbert model name (default: Colbertv2.0)')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
-    parser.add_argument('--data_dir', type=str, default='knn_dataset',
+    parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
     parser.add_argument('--skip-zero-vec', action=argparse.BooleanOptionalAction, default=True,
                         help='Skip generating zero vectors when failing to retrieve the embedding (default: True)')
@@ -338,6 +333,10 @@ Some example commands:\n
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True,
                         help='Generate hdf5 files (default: True)')
+    parser.add_argument('--remove-query-duplicate', action=argparse.BooleanOptionalAction, default=False,
+                        help='Remove duplicate (token) embeddings in the query dataset (default: False)')
+    parser.add_argument('--remove-base-duplicate', action=argparse.BooleanOptionalAction, default=False,
+                        help='Remove duplicate (token) embeddings in the base dataset (default: False)')
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
     parser.add_argument('--disable-memory-tuning', action='store_false',
                         help='Disable memory tuning (useful for very small datasets)')
@@ -360,6 +359,8 @@ Some example commands:\n
 * skip zero vector: `{args.skip_zero_vec}`\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
+* remove query duplicate (token) embeddings : `{args.remove_query_duplicate}`\n
+* remove base duplicate (token) embeddings : `{args.remove_base_duplicate}`\n
 * enable memory tuning: `{args.enable_memory_tuning}`
 """))
 
@@ -377,9 +378,9 @@ Some example commands:\n
 
     token_embed_columns = [f'token_embedding_{i}' for i in range(input_dimensions)]
 
-    query_embed_token_filename = f'{data_dir}/{model_prefix}_{input_dimensions}_query{args.query_count}_src_embed_token.parquet'
+    query_embed_token_filename = get_full_filename(data_dir,
+                                                   f"{model_prefix}_{input_dimensions}_query{args.query_count}_src_embed_token.parquet")
     query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
-    query_remove_duplicates = False
     query_print_info = True
     if not os.path.exists(query_embed_token_filename):
         (query_row_cnt, query_embed_cnt, query_embed_cnt_token, query_detected0cnt,
@@ -392,12 +393,46 @@ Some example commands:\n
                                    args.query_token_count,
                                    "question",
                                    skip_zero_vec=args.skip_zero_vec,
-                                   remove_duplicates=query_remove_duplicates))
+                                   remove_duplicates=args.remove_query_duplicate))
     else:
         query_print_info = False
         print(f"The source query embed file already exists, skip processing the query source dataset.\n")
 
     query_embed_streamer.close()
+    rprint(Markdown(
+        f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
+
+    rprint(Markdown("---"), '')
+    rprint(Markdown("**Generating base dataset with embeddings ......** "), '')
+    section_time = time.time()
+    src_base_dataset = datasets.load_dataset(BASE_DATASET,
+                                             BASE_CONFIG,
+                                             cache_dir=".cache",
+                                             beam_runner='DirectRunner',
+                                             trust_remote_code=True,
+                                             split='train')
+
+    base_embed_token_filename = get_full_filename(data_dir,
+                                                  f"{model_prefix}_{input_dimensions}_base{args.base_count}_src_embed_token.parquet")
+    base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
+    base_print_info = True
+    if not os.path.exists(base_embed_token_filename):
+        (base_row_cnt, base_embed_cnt, base_embed_cnt_token, base_detected0cnt,
+         base_skipped0cnt, base_sentence_cnt, base_duplicate_cnt) = (
+            process_source_dataset(base_embed_streamer,
+                                   src_base_dataset,
+                                   args.model_name,
+                                   input_dimensions,
+                                   args.base_count,
+                                   args.base_token_count,
+                                   "text",
+                                   skip_zero_vec=args.skip_zero_vec,
+                                   remove_duplicates=args.remove_base_duplicate))
+    else:
+        base_print_info = False
+        print(f"The source base embed file already exists, skip processing the base source dataset.\n")
+
+    base_embed_streamer.close()
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
@@ -413,42 +448,8 @@ Some example commands:\n
                            query_detected0cnt,
                            args.skip_zero_vec,
                            query_skipped0cnt,
-                           False,
+                           args.remove_query_duplicate,
                            query_duplicate_cnt)
-
-    rprint(Markdown("---"), '')
-    rprint(Markdown("**Generating base dataset with embeddings ......** "), '')
-    section_time = time.time()
-    src_base_dataset = datasets.load_dataset(BASE_DATASET,
-                                             BASE_CONFIG,
-                                             cache_dir=".cache",
-                                             beam_runner='DirectRunner',
-                                             trust_remote_code=True,
-                                             split='train')
-
-    base_embed_token_filename = f'{data_dir}/{model_prefix}_{input_dimensions}_base{args.base_count}_src_embed_token.parquet'
-    base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
-    base_remove_duplicates = False
-    base_print_info = True
-    if not os.path.exists(base_embed_token_filename):
-        (base_row_cnt, base_embed_cnt, base_embed_cnt_token, base_detected0cnt,
-         base_skipped0cnt, base_sentence_cnt, base_duplicate_cnt) = (
-            process_source_dataset(base_embed_streamer,
-                                   src_base_dataset,
-                                   args.model_name,
-                                   input_dimensions,
-                                   args.base_count,
-                                   args.base_token_count,
-                                   "text",
-                                   skip_zero_vec=args.skip_zero_vec,
-                                   remove_duplicates=base_remove_duplicates))
-    else:
-        base_print_info = False
-        print(f"The source base embed file already exists, skip processing the base source dataset.\n")
-
-    base_embed_streamer.close()
-    rprint(Markdown(
-        f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
     if base_print_info:
         print("\n")
@@ -462,18 +463,21 @@ Some example commands:\n
                            base_detected0cnt,
                            args.skip_zero_vec,
                            base_skipped0cnt,
-                           False,
+                           args.remove_base_duplicate,
                            base_duplicate_cnt)
     print("\n")
 
     rprint(Markdown("---"), '')
     rprint(Markdown("**Computing knn ......** "), '')
+    final_indecies_filename = get_full_filename(data_dir,
+                                                f"{model_prefix}_{input_dimensions}_final_indices_query{args.query_token_count}_k{args.k}.parquet")
+    final_distances_filename = get_full_filename(data_dir,
+                                                 f"{model_prefix}_{input_dimensions}_final_distances_query{args.query_token_count}_k{args.k}.parquet")
     section_time = time.time()
-    process_knn_computation(data_dir,
-                            args.model_name,
-                            input_dimensions,
+    process_knn_computation(base_embed_token_filename,
                             query_embed_token_filename,
-                            base_embed_token_filename,
+                            final_indecies_filename,
+                            final_distances_filename,
                             mem_tune=args.enable_memory_tuning,
                             k=args.k)
     rprint(Markdown(
@@ -482,21 +486,46 @@ Some example commands:\n
     rprint(Markdown("---"), '')
     rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
-    merge_indices_and_distances(data_dir, args.model_name, get_embedding_size(args.model_name), args.k)
+    merge_indices_and_distances(data_dir,
+                                model_prefix,
+                                input_dimensions,
+                                final_indecies_filename,
+                                final_distances_filename,
+                                args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
     rprint(Markdown("---"), '')
     rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
-    query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec = \
-        generate_ivec_fvec_files(data_dir, args.model_name, input_dimensions,
-                                 None, None,
-                                 f"{model_prefix}_{input_dimensions}_final_indices_k{args.k}.parquet",
-                                 f"{model_prefix}_{input_dimensions}_final_distances_k{args.k}.parquet",
-                                 args.base_count,
-                                 args.query_count,
-                                 args.k)
+    query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
+        generate_ivec_fvec_files(data_dir,
+                                 args.model_name,
+                                 input_dimensions,
+                                 base_embed_token_filename,
+                                 query_embed_token_filename,
+                                 final_indecies_filename,
+                                 final_distances_filename,
+                                 args.base_token_count,
+                                 args.query_token_count,
+                                 args.k,
+                                 token_embed_columns)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
+
     rprint(Markdown("---"), '')
+    if args.gen_hdf5:
+        rprint(Markdown("**Generating hdf5 ......** "), '')
+        section_time = time.time()
+        generate_hdf5_file(data_dir,
+                           model_prefix,
+                           input_dimensions,
+                           base_df_hdf5,
+                           query_df_hdf5,
+                           final_indecies_filename,
+                           final_distances_filename,
+                           args.base_token_count,
+                           args.query_token_count,
+                           args.k)
+        rprint(Markdown(
+            f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))

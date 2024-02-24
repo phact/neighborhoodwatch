@@ -147,19 +147,19 @@ def prep_table(data_dir, filename, count, input_dimension):
 
 
 def compute_knn(data_dir,
-                model_name,
+                model_prefix,
                 input_dimensions,
                 query_filename,
                 query_count,
                 base_filename,
                 base_count,
-                mem_tune=True,
+                final_indecies_filename,
+                final_distances_filename,
+                mem_tune=False,
                 k=100,
                 initial_batch_size=100000,
                 max_memory_threshold=0.1,
                 split=True):
-    model_prefix = get_model_prefix(model_name)
-
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     batch_size = initial_batch_size
@@ -180,6 +180,8 @@ def compute_knn(data_dir,
     process_batches(data_dir,
                     model_prefix,
                     input_dimensions,
+                    final_indecies_filename,
+                    final_distances_filename,
                     base_table,
                     query_table,
                     batch_count,
@@ -201,6 +203,8 @@ def cleanup(*args):
 def process_batches(data_dir,
                     model_prefix,
                     input_dimensions,
+                    final_indecies_filename,
+                    final_distances_filename,
                     base_table,
                     query_table,
                     batch_count,
@@ -260,8 +264,7 @@ def process_batches(data_dir,
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        stream_cudf_to_parquet(distances, 100000,
-                               f'{data_dir}/{model_prefix}_{input_dimensions}_distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{input_dimensions}_indices{start}.parquet')
+        stream_cudf_to_parquet(distances, 100000, final_distances_filename)
+        stream_cudf_to_parquet(indices, 100000, final_indecies_filename)
 
         cleanup(df_numeric, distances, indices, dataset)

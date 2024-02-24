@@ -81,42 +81,44 @@ def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_column
             f.write(vec.tobytes())
 
 
-def read_and_extract(data_dir, input_parquet, base_count, dimensions):
+def read_and_extract(data_dir, input_parquet, rowcount, dimensions, column_names=None):
     full_filename = get_full_filename(data_dir, input_parquet)
     table = pq.read_table(full_filename)
-    table = table.slice(0, base_count)
+    table = table.slice(0, rowcount)
 
-    column_names = []
-    for i in range(dimensions):
-        column_names.append(f'embedding_{i}')
-    columns_to_drop = list(set(table.schema.names) - set(column_names))
-    for col in columns_to_drop:
-        if col in table.schema.names:  # Check if the column exists in the table
-            col_index = table.schema.get_field_index(col)
-            table = table.remove_column(col_index)
+    if column_names is None:
+        column_names = []
+        for i in range(dimensions):
+            column_names.append(f'embedding_{i}')
+        columns_to_drop = list(set(table.schema.names) - set(column_names))
+        for col in columns_to_drop:
+            if col in table.schema.names:  # Check if the column exists in the table
+                col_index = table.schema.get_field_index(col)
+                table = table.remove_column(col_index)
+
     df = table.to_pandas()
     return df
 
 
-def generate_query_vectors_fvec(data_dir, input_parquet, query_count, model_prefix, dimensions):
-    df = read_and_extract(data_dir, input_parquet, query_count, dimensions)
+def generate_query_vectors_fvec(data_dir, input_parquet, query_count, model_prefix, dimensions, column_names=None):
+    df = read_and_extract(data_dir, input_parquet, query_count, dimensions, column_names)
     output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_query_vectors_{query_count}.fvec'
     if not os.path.exists(output_fvec):
         write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
     else:
         print(f"File {output_fvec} already exists")
-    return output_fvec
+    return output_fvec, df
 
 
 # Generate base_vectors.fvec file
-def generate_base_vectors_fvec(data_dir, input_parquet, base_count, model_prefix, dimensions):
-    df = read_and_extract(data_dir, input_parquet, base_count, dimensions)
+def generate_base_vectors_fvec(data_dir, input_parquet, base_count, model_prefix, dimensions, column_names=None):
+    df = read_and_extract(data_dir, input_parquet, base_count, dimensions, column_names)
     output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_base_vectors_{base_count}.fvec'
     if not os.path.exists(output_fvec):
         write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
     else:
         print(f"File {output_fvec} already exists")
-    return output_fvec
+    return output_fvec, df
 
 
 def generate_distances_fvec(data_dir, input_parquet, base_count, query_count, k, model_prefix, dimensions):
@@ -145,72 +147,88 @@ def generate_ivec_fvec_files(data_dir,
                              model_name,
                              dimensions,
                              base_vectors_parquet,
-                             query_vectors_parquet, 
-                             indices_parquet,
+                             query_vectors_parquet,
+                             final_indices_parquet,
                              final_distances_parquet,
-                             base_count, 
-                             query_count, 
-                             k):
+                             base_count,
+                             query_count,
+                             k,
+                             column_names=None):
     model_prefix = get_model_prefix(model_name)
 
-    query_vector_fvec = None
-    if query_vectors_parquet is not None:
-        rprint(Markdown("Generated files: "), '')
-        query_vector_fvec = generate_query_vectors_fvec(data_dir, query_vectors_parquet, query_count, model_prefix, dimensions)
-        rprint(Markdown(f"*`{query_vector_fvec}`* - query vector count: `{count_vectors(data_dir, query_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, query_vector_fvec))}`"))
+    rprint(Markdown("Generated files: "), '')
 
-    base_vector_fvec = None
-    if base_vectors_parquet is not None:
-        base_vector_fvec = generate_base_vectors_fvec(data_dir, base_vectors_parquet, base_count, model_prefix, dimensions)
-        rprint(Markdown(f"*`{base_vector_fvec}`* - base vector count: `{count_vectors(data_dir, base_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, base_vector_fvec))}`"))
-    
-    indices_ivec = generate_indices_ivec(data_dir, indices_parquet, base_count, query_count, k, model_prefix, dimensions)
+    query_vector_fvec, query_df = generate_query_vectors_fvec(data_dir,
+                                                              query_vectors_parquet,
+                                                              query_count,
+                                                              model_prefix,
+                                                              dimensions,
+                                                              column_names)
+    rprint(Markdown(f"*`{query_vector_fvec}`* - query vector count: `{count_vectors(data_dir, query_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, query_vector_fvec))}`"))
+
+    base_vector_fvec, base_df = generate_base_vectors_fvec(data_dir,
+                                                           base_vectors_parquet,
+                                                           base_count,
+                                                           model_prefix,
+                                                           dimensions,
+                                                           column_names)
+    rprint(Markdown(f"*`{base_vector_fvec}`* - base vector count: `{count_vectors(data_dir, base_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, base_vector_fvec))}`"))
+
+    indices_ivec = generate_indices_ivec(data_dir,
+                                         final_indices_parquet,
+                                         base_count,
+                                         query_count,
+                                         k,
+                                         model_prefix,
+                                         dimensions)
     rprint(Markdown(f"*`{indices_ivec}`* - indices count: `{count_vectors(data_dir, indices_ivec)}`, k: `{len(get_first_vector(data_dir, indices_ivec))}`"))
     
-    distances_fvec = generate_distances_fvec(data_dir, final_distances_parquet, base_count, query_count, k, model_prefix, dimensions)
+    distances_fvec = generate_distances_fvec(data_dir,
+                                             final_distances_parquet,
+                                             base_count,
+                                             query_count,
+                                             k,
+                                             model_prefix,
+                                             dimensions)
     rprint(Markdown(f"*`{distances_fvec}`* - distances count: `{count_vectors(data_dir, distances_fvec)}`, k: `{len(get_first_vector(data_dir, distances_fvec))}`"))
     
-    return query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec
+    return query_vector_fvec, query_df, base_vector_fvec, base_df, indices_ivec, distances_fvec
 
 
 def generate_hdf5_file(data_dir,
-                       model_name,
+                       model_prefix,
                        dimensions,
-                       base_vectors_parquet,
-                       query_vectors_parquet, 
-                       indices_parquet,
+                       base_df_hdf5,
+                       query_df_hdf5,
+                       final_indices_parquet,
                        final_distances_parquet,
                        base_count, 
                        query_count, 
                        k):
-    model_prefix = get_model_prefix(model_name)
-
-    filename = f'{model_prefix}_{dimensions}_base_{base_count}_query_{query_count}_k{k}.hdf5'
-    filename = get_full_filename(data_dir, filename)
+    filename = get_full_filename(data_dir,
+                                 f"{model_prefix}_{dimensions}_base_{base_count}_query_{query_count}_k{k}.hdf5")
 
     rprint(Markdown(f"Generated file: {filename}"), '')
 
-    df = read_and_extract(data_dir, base_vectors_parquet, base_count, dimensions)
-    write_hdf5(data_dir, df, filename, 'train')
+    write_hdf5(data_dir, base_df_hdf5, filename, 'train')
 
-    df = read_and_extract(data_dir, query_vectors_parquet, base_count, dimensions)
-    write_hdf5(data_dir, df, filename, 'test')
+    write_hdf5(data_dir, query_df_hdf5, filename, 'test')
 
     df = read_parquet_to_dataframe(data_dir, final_distances_parquet)
     write_hdf5(data_dir, df, filename, 'distances')
 
-    df = read_parquet_to_dataframe(data_dir, indices_parquet)
+    df = read_parquet_to_dataframe(data_dir, final_indices_parquet)
     write_hdf5(data_dir, df, filename, 'neighbors')
 
 
 def write_hdf5(data_dir, df, filename, datasetname):
-    data = df.values
+    data = df.to_numpy()
     full_filename = get_full_filename(data_dir, filename)
     with h5py.File(full_filename, 'a') as f:
         if datasetname in f:
             print(f"Dataset '{datasetname}' already exists in file '{full_filename}'")
         else:
-            rprint(Markdown(f"writing to dataset '{datasetname}' - dimension: {df.shape}"))
+            rprint(Markdown(f"writing to dataset '{datasetname}' - shape: {df.shape}"))
             f.create_dataset(datasetname, data=data)
 
 

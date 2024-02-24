@@ -37,9 +37,12 @@ def read_ifvec_parquet_with_proper_schema(filename):
     return ifvec_table
 
 
-def merge_indices_and_distances(data_dir, model_name, input_dimension, k=100):
-    model_prefix = get_model_prefix(model_name)
-
+def merge_indices_and_distances(data_dir,
+                                model_prefix,
+                                input_dimension,
+                                final_indices_filename,
+                                final_distances_filename,
+                                k=100):
     file_count = get_file_count(data_dir, model_prefix, input_dimension)
     if file_count > 0:
         indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_indices0.parquet")
@@ -47,9 +50,6 @@ def merge_indices_and_distances(data_dir, model_name, input_dimension, k=100):
 
         batch_size = min(10000000, len(indices_table))
         batch_count = math.ceil(len(indices_table) / batch_size)
-
-        final_indices_filename = f"{data_dir}/{model_prefix}_{input_dimension}_final_indices_k{k}.parquet"
-        final_distances_filename = f"{data_dir}/{model_prefix}_{input_dimension}_final_distances_k{k}.parquet"
 
         final_indices_writer = pq.ParquetWriter(final_indices_filename, indices_table.schema)
         final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
@@ -117,7 +117,3 @@ def merge_indices_and_distances(data_dir, model_name, input_dimension, k=100):
 
         final_indices_writer.close()
         final_distances_writer.close()
-
-
-if __name__ == "__main__":
-    merge_indices_and_distances('.', 'intfloat/e5-query-v2', 10)
