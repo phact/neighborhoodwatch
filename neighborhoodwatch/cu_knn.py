@@ -177,10 +177,7 @@ def compute_knn(data_dir,
     assert (len(base_table) % batch_size == 0) or k <= (
             len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    process_batches(data_dir,
-                    model_prefix,
-                    input_dimensions,
-                    final_indecies_filename,
+    process_batches(final_indecies_filename,
                     final_distances_filename,
                     base_table,
                     query_table,
@@ -200,10 +197,7 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(data_dir,
-                    model_prefix,
-                    input_dimensions,
-                    final_indecies_filename,
+def process_batches(final_indecies_filename,
                     final_distances_filename,
                     base_table,
                     query_table,

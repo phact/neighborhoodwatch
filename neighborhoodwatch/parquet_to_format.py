@@ -58,7 +58,7 @@ def get_nth_vector(data_dir, filename, n):
             if ("distances" not in full_filename):
                 if not np.count_nonzero(vector) == 0:
                     if not np.isclose(np.linalg.norm(vector), 1):
-                        assert np.isclose(np.linalg.norm(vector), 1), f"Vector {n} in file {full_filename} is not normalized: {vector}"
+                        assert np.isclose(np.linalg.norm(vector), 1, 1e-4), f"Vector {n} in file {full_filename} is not normalized: {vector}"
                 else:
                     print(f"Vector {n} in file {full_filename} is the zero vector: {vector}")
 

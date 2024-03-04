@@ -1,4 +1,6 @@
 import argparse
+from datetime import datetime
+
 import requests
 import datasets
 import tarfile
@@ -17,12 +19,13 @@ import math
 import numpy as np
 from pylibraft.neighbors.brute_force import knn
 import rmm
+import logging
 
 from pathlib import Path
 from torch import Tensor
 from tqdm import tqdm
 
-from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory, prep_table
+from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory, prep_table, process_batches
 from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
     is_zero_embedding, ParquetStreamer
 from neighborhoodwatch.merge import merge_indices_and_distances
@@ -40,12 +43,12 @@ pa.jemalloc_set_decay_ms(0)
 
 
 class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self, model_name="colbertv2.0", download_pretrained_model=False):
+    def __init__(self, model_name="colbertv2.0", download_pretrained_model=False, chunk_size=300000):
         # - In Colbert model, each input text token (NOTE not input text itself) corresponds to a "token" vector
         #   with a smaller dimension size (e.g. 128). The total "dimension" size of the entire input text is
         #   not fixed (depending on the tokens of the input text).
         # - The number here refers to the "token" dimension size.
-        super().__init__(model_name, 128, 256)
+        super().__init__(model_name, 128, chunk_size)
 
         self.local_model_base_dir = f".pretrained"
         Path(self.local_model_base_dir).mkdir(parents=True, exist_ok=True)
@@ -96,36 +99,48 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
         return embeddings
 
 
+def remove_duplicate_embeddings(embedding_array):
+    cnt1 = len(embedding_array)
+    embedding_array = list(set(map(tuple, embedding_array)))
+    cnt2 = len(embedding_array)
+
+    return embedding_array, cnt1 - cnt2,
+
+
 def process_source_dataset(streamer,
                            dataset,
                            model_name,
                            input_dimensions,
-                           row_count,
                            token_count,
+                           embedding_chunk_size,
                            column_to_embed,
                            skip_zero_vec=True,
-                           remove_duplicates=False):
-    token_embedding_output_batch_size = 10000
-
-    embedding_counter = 0
-    token_embedding_counter = 0
-    detected_zero_embedding_cnt = 0
-    skipped_zero_embedding_cnt = 0
+                           remove_duplicates=False,
+                           logger=None):
+    token_embedding_chk_dup_size = min(1000000, token_count)
 
     cur_row = 0
+    row_count = len(dataset)
     total_sentence_cnt = 0
     total_duplicate_removed_cnt = 0
+    nodup_embedding_cnt = 0
+    last_nodup_embedding_cnt = 0
+    processed_token_embedding_cnt = 0
+    processed_text_embedding_cnt = 0
+    detected_text_zero_embedding_cnt = 0
+    skipped_text_zero_embedding_cnt = 0
 
     text_map = []
+    # may have duplicates
     embedding_array = []
 
     if model_name == "colbertv2.0":
-        generator = ColbertPreTrainedEmbeddingGenerator()
+        generator = ColbertPreTrainedEmbeddingGenerator(chunk_size=embedding_chunk_size)
     else:
         assert False, f"Unsupported model name: {model_name}"
 
     def break_out_of_loop():
-        return cur_row >= row_count or token_embedding_counter >= token_count
+        return cur_row >= row_count or nodup_embedding_cnt >= token_count
 
     for row in dataset:
         if break_out_of_loop():
@@ -137,12 +152,10 @@ def process_source_dataset(streamer,
         text_map.append([cur_row, sentence_list])
         total_sentence_cnt += len(sentence_list)
 
-        embedding_tuple_list, detected_zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
+        embedding_tuple_list, detected_text_zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
         text_map.clear()
 
-
-        # for embedding_tuple in tqdm(embedding_tuple_list):
-        for embedding_tuple in embedding_tuple_list:
+        for embedding_tuple in tqdm(embedding_tuple_list):
             embedding_list = embedding_tuple[1]
 
             for embedding in embedding_list:
@@ -150,26 +163,24 @@ def process_source_dataset(streamer,
                     f"embedding dimension length {len(embedding)} is not a multiple of token embedding size {input_dimensions}"
 
                 if skip_zero_vec and is_zero_embedding(embedding):
-                    skipped_zero_embedding_cnt += 1
+                    skipped_text_zero_embedding_cnt += 1
                 else:
                     token_embedding_list = [embedding[i * input_dimensions:(i + 1) * input_dimensions] for i in
                                             range((len(embedding) + input_dimensions - 1) // input_dimensions)]
 
-                    embedding_counter += 1
+                    processed_text_embedding_cnt += 1
                     for token_embedding in token_embedding_list:
                         embedding_array.append(token_embedding)
-                        token_embedding_counter += 1
+                        processed_token_embedding_cnt += 1
 
-                        if (token_embedding_counter % token_embedding_output_batch_size == 0) and len(embedding_array) > 0:
-                            cnt1 = len(embedding_array)
-                            if remove_duplicates:
-                                embedding_array = list(set(map(tuple, embedding_array)))
-                                cnt2 = len(embedding_array)
-                                total_duplicate_removed_cnt += (cnt1 - cnt2)
-                                token_embedding_counter -= (cnt1 - cnt2)
-
-                            streamer.stream_to_parquet_without_src_metadata(embedding_array)
-                            embedding_array.clear()
+                        # Remove duplicates duplicate check size
+                        if remove_duplicates and (processed_token_embedding_cnt % token_embedding_chk_dup_size == 0):
+                            embedding_array, removed_cnt = remove_duplicate_embeddings(embedding_array)
+                            nodup_embedding_cnt = len(embedding_array)
+                            total_duplicate_removed_cnt += removed_cnt
+                            if logger is not None and nodup_embedding_cnt != last_nodup_embedding_cnt:
+                                logger.info(f"[batch {processed_token_embedding_cnt//token_embedding_chk_dup_size}] processed_token_embedding_cnt: {processed_token_embedding_cnt}; nodup_embedding_cnt: {nodup_embedding_cnt}; total_duplicate_removed_cnt: {total_duplicate_removed_cnt}")
+                                last_nodup_embedding_cnt = nodup_embedding_cnt
 
                         if break_out_of_loop():
                             break
@@ -181,22 +192,28 @@ def process_source_dataset(streamer,
                 break
 
     if len(embedding_array) > 0:
+        if logger is not None:
+            logger.info(
+                f"[final] processed_token_embedding_cnt: {processed_token_embedding_cnt}; nodup_embedding_cnt: {nodup_embedding_cnt}; total_duplicate_removed_cnt: {total_duplicate_removed_cnt}")
         streamer.stream_to_parquet_without_src_metadata(embedding_array)
         embedding_array.clear()
 
     return (cur_row,
-            embedding_counter,
-            token_embedding_counter,
-            detected_zero_embedding_cnt,
-            skipped_zero_embedding_cnt,
             total_sentence_cnt,
-            total_duplicate_removed_cnt)
+            processed_text_embedding_cnt,
+            processed_token_embedding_cnt,
+            total_duplicate_removed_cnt,
+            detected_text_zero_embedding_cnt,
+            skipped_text_zero_embedding_cnt)
 
 
 def process_knn_computation(base_filename,
+                            base_count,
                             query_filename,
+                            query_count,
                             final_indices_filename,
                             final_distances_filename,
+                            remove_duplicates,
                             mem_tune=False,
                             initial_batch_size=1000000,
                             max_memory_threshold=0.1,
@@ -204,11 +221,12 @@ def process_knn_computation(base_filename,
                             split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
+    remove_query_duplicate, remove_base_duplicate = remove_duplicates
+
     print(f"-- prepare query source table for brute-force KNN computation.")
-    query_table = pq.read_table(query_filename)
+    query_table = pq.read_table(query_filename).slice(0, query_count)
     print(f"   query_table.shape: {query_table.shape}")
-    print(f"-- prepare base source table for brute-force KNN computation.")
-    base_table = pq.read_table(base_filename)
+    base_table = pq.read_table(base_filename).slice(0, base_count)
     print(f"   base_table.shape: {base_table.shape}")
 
     batch_size = initial_batch_size
@@ -219,69 +237,17 @@ def process_knn_computation(base_filename,
     assert (len(base_table) % batch_size == 0) or k <= (
             len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    # for start in tqdm(range(0, batch_count)):
-    for start in range(0, batch_count):
-        batch_offset = start * batch_size
-        batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
-
-        dataset_batch = base_table.slice(batch_offset, batch_length)
-        df = cudf.DataFrame.from_arrow(dataset_batch)
-
-        df_numeric = df.select_dtypes(['float32', 'float64'])
-        cleanup(df)
-
-        dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
-
-        # Split the DataFrame into parts (floor division)
-        # TODO: pull out this variable
-        # split_factor = 50
-        split_factor = 1
-        splits = split_factor * batch_count
-        rows_per_split = len(query_table) // splits
-
-        distances = cudf.DataFrame()
-        indices = cudf.DataFrame()
-        if split:
-            # for i in tqdm(range(splits)):
-            for i in range(splits):
-                offset = i * rows_per_split
-                length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
-
-                query_batch = query_table.slice(offset, length)
-
-                df1 = cudf.DataFrame.from_arrow(query_batch)
-                df_numeric1 = df1.select_dtypes(['float32', 'float64'])
-
-                cleanup(df1)
-                query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
-
-                assert (k <= len(dataset))
-
-                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
-                                                   query.astype(np.float32),
-                                                   k)
-
-                distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
-                # add batch_offset to indices
-                indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
-
-                distances = cudf.concat([distances, distances1], ignore_index=True)
-                indices = cudf.concat([indices, indices1], ignore_index=True)
-
-            distances.columns = distances.columns.astype(str)
-            indices.columns = indices.columns.astype(str)
-
-        assert (len(distances) == len(query_table))
-        assert (len(indices) == len(query_table))
-
-        stream_cudf_to_parquet(distances, 1000000, final_indices_filename)
-        stream_cudf_to_parquet(indices, 1000000, final_distances_filename)
-
-        cleanup(df_numeric, distances, indices, dataset)
+    process_batches(final_indices_filename,
+                    final_distances_filename,
+                    base_table,
+                    query_table,
+                    batch_count,
+                    batch_size,
+                    k,
+                    split)
 
 
 def print_dataset_info(source_dataset_name,
-                       row_count,
                        token_count,
                        actual_row_cnt,
                        actual_sentence_cnt,
@@ -295,17 +261,16 @@ def print_dataset_info(source_dataset_name,
     print(f"=================================================")
     print(f"== '{source_dataset_name}' source dataset stats")
     print(f"== ----------------------------------------------")
-    print(f"== Expected total count of source data rows: {row_count}")
     print(f"== Expected total count of source data tokens: {token_count}")
     print(f"== Total count of source data rows: {actual_row_cnt}")
     print(f"== Total count of sentences: {actual_sentence_cnt}")
     print(f"== Total count of sentence-embeddings: {actual_embedding_counter}")
     print(f"== Total count of token-embeddings: {actual_token_embedding_counter}")
+    if remove_duplicates:
+        print(f"== Total count of duplicate token-embeddings removed: {duplicate_removed_cnt}")
     print(f"== Total count of detected zero sentence-embeddings: {detected_zero_embedding_cnt}")
     if skip_zero_vec:
         print(f"== Total count of skipped zero sentence-embeddings: {skipped_zero_embedding_cnt}")
-    if remove_duplicates:
-        print(f"== Total count of duplicate token_embeddings removed: {duplicate_removed_cnt}")
     print(f"=================================================")
 
 
@@ -316,15 +281,15 @@ def main():
         description="""ck (Colbert KNN) uses GPU acceleration to generate ground truth KNN datasets with Colbert embeddings.""",
         epilog="""
 Some example commands:\n
-    ckef 1000 10000 100000 1000000 -k 100 --disable-memory-tuning
+    ckef 100000 1000000 -k 100 --disable-memory-tuning
         """, formatter_class=KeepLineBreaksFormatter)
-    parser.add_argument('query_count', type=int, help="number of query vectors to generate")
-    parser.add_argument('base_count', type=int, help="number of base vectors to generate")
     parser.add_argument('query_token_count', type=int, help="number of query token vectors to generate")
     parser.add_argument('base_token_count', type=int, help="number of base token vectors to generate")
     parser.add_argument('-m', '--model_name', type=str, default="Colbertv2.0",
                         help='Colbert model name (default: Colbertv2.0)')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
+    parser.add_argument('-es', '--embedding_scale', type=str, default="medium",
+                        help='Embedding scale. Options: small (10000), medium(100000), large (1000000) (default: medium)')
     parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
     parser.add_argument('--skip-zero-vec', action=argparse.BooleanOptionalAction, default=True,
@@ -350,11 +315,11 @@ Some example commands:\n
     rprint('', Markdown(f"""**Colbert KNN** is generating brute force neighbors based on the wikipedia dataset with the following specification:\n
 --- dataset/model specification ---\n
 * source dataset version: `{BASE_DATASET}-{BASE_CONFIG}`\n
-* query count: `{args.query_count}`\n
-* base vector count: `{args.base_count}`\n
 * query token vector count: `{args.query_token_count}`\n
 * base token vector count: `{args.base_token_count}`\n
 * model name: `{args.model_name}`\n
+* K: `{args.k}`\n
+* embedding scale: `{args.embedding_scale}`\n
 --- behavior specification ---\n
 * skip zero vector: `{args.skip_zero_vec}`\n
 * use dataset API: `{args.use_dataset_api}`\n
@@ -365,9 +330,29 @@ Some example commands:\n
 """))
 
     model_prefix = get_model_prefix(args.model_name)
-    data_dir = f"{args.data_dir}/{model_prefix}/q{args.query_count}_qk{args.query_token_count}_b{args.base_count}_bk{args.base_token_count}_k{args.k}"
+    data_dir = f"{args.data_dir}/{model_prefix}/qt{args.query_token_count}_bt{args.base_token_count}_k{args.k}"
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
+
+    if args.embedding_scale is None or args.embedding_scale == "medium":
+        embedding_chunk_size = 100000
+    elif args.embedding_scale == "small":
+        embedding_chunk_size = 10000
+    elif args.embedding_scale == "large":
+        embedding_chunk_size = 1000000
+    else:
+        rprint(Markdown(f"Invalid embedding scale: {args.embedding_scale}"))
+        sys.exit(1)
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(filename)s:%(lineno)s - %(funcName)20s() - %(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(f"{data_dir}/colbert_knn_{datetime.now().strftime('%Y-%m-%d-%H-%M-%S')}.log", mode="w"),
+            logging.StreamHandler()
+        ]
+    )
+    logger = logging.getLogger(__name__)
 
     input_dimensions = get_embedding_size(args.model_name)
 
@@ -379,21 +364,22 @@ Some example commands:\n
     token_embed_columns = [f'token_embedding_{i}' for i in range(input_dimensions)]
 
     query_embed_token_filename = get_full_filename(data_dir,
-                                                   f"{model_prefix}_{input_dimensions}_query{args.query_count}_src_embed_token.parquet")
+                                                   f"{model_prefix}_{input_dimensions}_query_token{args.query_token_count}_src.parquet")
     query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
     query_print_info = True
     if not os.path.exists(query_embed_token_filename):
-        (query_row_cnt, query_embed_cnt, query_embed_cnt_token, query_detected0cnt,
-         query_skipped0cnt, query_sentence_cnt, query_duplicate_cnt) = (
+        (query_row_cnt, query_sentence_cnt, query_embed_cnt, query_embed_cnt_token,
+         query_duplicate_cnt, query_detected0cnt, query_skipped0cnt, ) = (
             process_source_dataset(query_embed_streamer,
                                    src_query_dataset,
                                    args.model_name,
                                    input_dimensions,
-                                   args.query_count,
                                    args.query_token_count,
+                                   embedding_chunk_size,
                                    "question",
                                    skip_zero_vec=args.skip_zero_vec,
-                                   remove_duplicates=args.remove_query_duplicate))
+                                   remove_duplicates=args.remove_query_duplicate,
+                                   logger=logger))
     else:
         query_print_info = False
         print(f"The source query embed file already exists, skip processing the query source dataset.\n")
@@ -413,21 +399,22 @@ Some example commands:\n
                                              split='train')
 
     base_embed_token_filename = get_full_filename(data_dir,
-                                                  f"{model_prefix}_{input_dimensions}_base{args.base_count}_src_embed_token.parquet")
+                                                  f"{model_prefix}_{input_dimensions}_base_token{args.base_token_count}_src.parquet")
     base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
     base_print_info = True
     if not os.path.exists(base_embed_token_filename):
-        (base_row_cnt, base_embed_cnt, base_embed_cnt_token, base_detected0cnt,
-         base_skipped0cnt, base_sentence_cnt, base_duplicate_cnt) = (
+        (base_row_cnt, base_sentence_cnt, base_embed_cnt, base_embed_cnt_token,
+         base_duplicate_cnt, base_detected0cnt, base_skipped0cnt) = (
             process_source_dataset(base_embed_streamer,
                                    src_base_dataset,
                                    args.model_name,
                                    input_dimensions,
-                                   args.base_count,
                                    args.base_token_count,
+                                   embedding_chunk_size,
                                    "text",
                                    skip_zero_vec=args.skip_zero_vec,
-                                   remove_duplicates=args.remove_base_duplicate))
+                                   remove_duplicates=args.remove_base_duplicate,
+                                   logger=logger))
     else:
         base_print_info = False
         print(f"The source base embed file already exists, skip processing the base source dataset.\n")
@@ -439,7 +426,6 @@ Some example commands:\n
     if query_print_info:
         print("\n")
         print_dataset_info("query",
-                           args.query_count,
                            args.query_token_count,
                            query_row_cnt,
                            query_sentence_cnt,
@@ -454,7 +440,6 @@ Some example commands:\n
     if base_print_info:
         print("\n")
         print_dataset_info("base",
-                           args.base_count,
                            args.base_token_count,
                            base_row_cnt,
                            base_sentence_cnt,
@@ -470,14 +455,17 @@ Some example commands:\n
     rprint(Markdown("---"), '')
     rprint(Markdown("**Computing knn ......** "), '')
     final_indecies_filename = get_full_filename(data_dir,
-                                                f"{model_prefix}_{input_dimensions}_final_indices_query{args.query_token_count}_k{args.k}.parquet")
+                                                f"{model_prefix}_{input_dimensions}_final_indices_query_token{args.query_token_count}_k{args.k}.parquet")
     final_distances_filename = get_full_filename(data_dir,
-                                                 f"{model_prefix}_{input_dimensions}_final_distances_query{args.query_token_count}_k{args.k}.parquet")
+                                                 f"{model_prefix}_{input_dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}.parquet")
     section_time = time.time()
     process_knn_computation(base_embed_token_filename,
+                            args.base_token_count,
                             query_embed_token_filename,
+                            args.query_token_count,
                             final_indecies_filename,
                             final_distances_filename,
+                            remove_duplicates=(args.remove_query_duplicate, args.remove_base_duplicate),
                             mem_tune=args.enable_memory_tuning,
                             k=args.k)
     rprint(Markdown(
