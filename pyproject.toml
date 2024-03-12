@@ -45,6 +45,7 @@ h5py = "^3.10.0"
 sentence-transformers = "2.2.2"
 #protobuf = "4.24.1"
 protobuf = "4.24.3"
+colbert-ai = "^0.2.18 "
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
@@ -55,3 +56,4 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.scripts]
 nw = "neighborhoodwatch.neighborhoodwatch:main"
+ck = "neighborhoodwatch.colbert_knn:main"

@@ -2,6 +2,7 @@ import math
 import os
 import multiprocessing
 import time
+from abc import ABC, abstractmethod
 
 import spacy
 import datasets
@@ -11,8 +12,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
+import requests
 
-import openai
 from openai import OpenAI
 
 from sentence_transformers import SentenceTransformer
@@ -27,13 +28,30 @@ nlp.add_pipe("sentencizer")
 # datasets.logging.set_verbosity_debug()
 datasets.logging.set_verbosity_warning()
 
+
 # datasets.logging.set_verbosity_info()
+
+
+class EmbeddingGenerator(ABC):
+    def __init__(self, model_name, dimensions, chunk_size):
+        self.model_name = model_name
+        self.dimensions = dimensions
+        self.chunk_size = chunk_size
+
+    @abstractmethod
+    def generate_embedding(self, text):
+        pass
+
+    # def simulate_zero_embedding(self, text):
+    #     zero_vectors = [np.zeros(self.dimensions) for _ in range(len(text))]
+    #     zero_vectors_array = np.stack(zero_vectors)
+    #     return zero_vectors_array
 
 
 ##
 # NOTE:
 # - requires the latest OpenAI python library (e.g. 1.10.0) that supports the new "text-embedding-3-x" models
-class OpenAIEmbeddingGenerator:
+class OpenAIEmbeddingGenerator(EmbeddingGenerator):
     """Description
     OpenAI text embedding generator. Supports all text embedding models from OpenAI
     * text-embedding-ada-002 (default) - default dimension size: 1536 (doesn't support reduced output dimension size)
@@ -45,13 +63,10 @@ class OpenAIEmbeddingGenerator:
         assert (model_name == "text-embedding-ada-002" or
                 model_name == "text-embedding-3-small" or
                 model_name == "text-embedding-3-large")
-
-        self.model_name = model_name
-        self.client = OpenAI()
-        self.chunk_size = 256
-        self.dimensions = reduced_dimension_size
-
         assert (reduced_dimension_size <= self.default_model_dimension_size())
+
+        self.client = OpenAI()
+        super().__init__(model_name, reduced_dimension_size, 256)
 
     def default_model_dimension_size(self):
         if self.model_name == "text-embedding-ada-002" or self.model_name == "text-embedding-3-small":
@@ -74,12 +89,10 @@ class OpenAIEmbeddingGenerator:
         return embeddings
 
 
-class VertexAIEmbeddingGenerator:
+class VertexAIEmbeddingGenerator(EmbeddingGenerator):
     def __init__(self, model_name='textembedding-gecko'):
-        self.model_name = model_name
         self.client = TextEmbeddingModel.from_pretrained(model_name)
-        self.chunk_size = 250
-        self.dimensions = 768
+        super().__init__(model_name, 768, 256)
 
     def generate_embedding(self, text):
         # Ensure the text is a list of sentences
@@ -92,17 +105,10 @@ class VertexAIEmbeddingGenerator:
         return embeddings
 
 
-class DefaultEmbeddingGenerator:
+class IntfloatE5EmbeddingGenerator(EmbeddingGenerator):
     def __init__(self, model_name='e5-v2-small'):
-        self.model_name = model_name
-        self.model = SentenceTransformer(self.model_name)
-        self.chunk_size = 1000
-        self.dimensions = self.model.get_sentence_embedding_dimension()
-
-    # def simulate_zero_embedding(self, text):
-    #     zero_vectors = [np.zeros(self.dimensions) for _ in range(len(text))]
-    #     zero_vectors_array = np.stack(zero_vectors)
-    #     return zero_vectors_array
+        self.model = SentenceTransformer(model_name)
+        super().__init__(model_name, self.model.get_sentence_embedding_dimension(), 256)
 
     def generate_embedding(self, text):
         # Ensure the text is a list of sentences
@@ -114,18 +120,45 @@ class DefaultEmbeddingGenerator:
         return embeddings
 
 
+class NvdiaNemoEmbeddingGenerator(EmbeddingGenerator):
+    def __init__(self, model_name='nvdia-nemo', embedding_srv_url='http://localhost:8080/v1/embeddings'):
+        super().__init__(model_name, 1024, 256)
+        self.embedding_srv_url = embedding_srv_url
+        self.stand_headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+
+    def generate_embedding(self, text):
+        # Ensure the text is a list of sentences
+        if isinstance(text, str):
+            text = [text]
+
+        # text = list(filter(None, text))
+
+        data = {"input": text,
+                "model": "NV-Embed-QA",
+                "input_type": "passage"}
+
+        response = requests.post(self.embedding_srv_url, json=data, headers=self.stand_headers)
+        response_json_data = response.json() if response and response.status_code == 200 else None
+
+        if response_json_data:
+            embeddings = [item['embedding'] for item in response_json_data['data']]
+            return embeddings
+        else:
+            raise Exception(f"Failed to get embeddings from {self.model_name} with response: {response}")
+
+
 def split_into_sentences(text):
     # if type(text) == pa.lib.StringScalar:
     #     text = text.as_py()
     doc = nlp(text)
-    return [sent.text.strip() for sent in doc.sents]
+    return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
 
 
 def is_zero_embedding(embedding):
     return not np.any(embedding)
 
 
-def get_batch_embeddings_from_generator(text_list, generator, skip_zero_vec=True):
+def get_batch_embeddings_from_generator(text_list, generator):
     embeddings = []
     chunk_size = generator.chunk_size
     total_items = len(text_list)
@@ -142,6 +175,7 @@ def get_batch_embeddings_from_generator(text_list, generator, skip_zero_vec=True
         try:
             if "e5" in generator.model_name:
                 process = ["query:" + s for s in process]
+
             response = generator.generate_embedding(process)
             for item in response:
                 # if len(item) != generator.model.get_sentence_embedding_dimension():
@@ -155,18 +189,15 @@ def get_batch_embeddings_from_generator(text_list, generator, skip_zero_vec=True
             print(f"   failed to get embeddings for text chunk (length: {len(process)}) with error: {e}")
             # When allowed, append zero vector(s) to the result if API call fails
             for _ in process:
-                zero_vec_cnt += 1
                 embeddings.append(zero_vector)
             continue
 
     return embeddings, zero_vec_cnt
 
 
-def get_embeddings_from_map(text_map, generator, skip_zero_vec=True):
+def get_embeddings_from_map(text_map, generator):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
-    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences,
-                                                                              generator,
-                                                                              skip_zero_vec)
+    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator)
     if zero_embedding_cnt > 0:
         print(f"   [warn] failed to get total {zero_embedding_cnt} embeddings!")
 
@@ -174,16 +205,16 @@ def get_embeddings_from_map(text_map, generator, skip_zero_vec=True):
     return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map], zero_embedding_cnt
 
 
-def process_dataset(streamer, dataset, row_count, embedding_column, model_name, output_dimension, skip_zero_vec=True):
+def process_dataset(streamer, dataset, row_count, embedding_column, model_name, reduced_dimension):
     meta_array = []
     embedding_array = []
 
     sentence_batch_size = 10000
     sentence_batch_size = min(sentence_batch_size, row_count)
 
+    # non-zero embedding counter
     embedding_counter = 0
     detected_zero_embedding_cnt = 0
-    skipped_zero_embedding_cnt = 0
 
     i = 0
     row_counter = 0
@@ -209,12 +240,16 @@ def process_dataset(streamer, dataset, row_count, embedding_column, model_name, 
                 generator = OpenAIEmbeddingGenerator(model_name=model_name)
             # OpenAI, newer model (3-small, 3-large)
             elif model_name == "text-embedding-3-small" or model_name == "text-embedding-3-large":
-                generator = OpenAIEmbeddingGenerator(model_name=model_name, reduced_dimension_size=output_dimension)
+                generator = OpenAIEmbeddingGenerator(model_name=model_name, reduced_dimension_size=reduced_dimension)
+            # Nvidia Nemo (local embedding server)
+            elif model_name == "nvidia-nemo":
+                generator = NvdiaNemoEmbeddingGenerator(model_name=model_name)
             # Default to Huggingface mode e5-small-v2
             else:
-                generator = DefaultEmbeddingGenerator(model_name=model_name)
+                generator = IntfloatE5EmbeddingGenerator(model_name=model_name)
 
-            embedding_tuple_list, detected_zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
+            embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
+            detected_zero_embedding_cnt += zero_embedding_cnt
 
             # for embedding_tuple in tqdm(embedding_tuple_list):
             for embedding_tuple in embedding_tuple_list:
@@ -223,32 +258,33 @@ def process_dataset(streamer, dataset, row_count, embedding_column, model_name, 
 
                 # for idx, embedding in tqdm(enumerate(embedding_list)):
                 for idx, embedding in enumerate(embedding_list):
-                    if skip_zero_vec and is_zero_embedding(embedding):
-                        skipped_zero_embedding_cnt += 1
-                    else:
-                        meta_row_array = []
-                        for column in dataset.column_names:
-                            if column == "title":
-                                # replace spaces with _
-                                # title_column_value = dataset[column][index].as_py()
-                                title_column_value = active_rows[index][column]
-                                # assert dataset[column][index] == active_rows[index][column], f"index mismatch {dataset[column][index]} != {row[column]}"
-                                meta_row_array.append(title_column_value.replace("_", " "))
-                            elif column == embedding_column:
-                                assert text_map[index][0] == index, f"index mismatch {text_map[0][0]} != {index}"
-                                value = text_map[index][1][idx]
-                                meta_row_array.append(value)
-                            else:
-                                meta_row_array.append(active_rows[index][column])
+                    # Skip zero vectors completely
+                    if is_zero_embedding(embedding):
+                        continue
 
-                        meta_array.append(meta_row_array)
-                        embedding_array.append(embedding)
-                        embedding_counter += 1
+                    meta_row_array = []
+                    for column in dataset.column_names:
+                        if column == "title":
+                            # replace spaces with _
+                            # title_column_value = dataset[column][index].as_py()
+                            title_column_value = active_rows[index][column]
+                            # assert dataset[column][index] == active_rows[index][column], f"index mismatch {dataset[column][index]} != {row[column]}"
+                            meta_row_array.append(title_column_value.replace("_", " "))
+                        elif column == embedding_column:
+                            assert text_map[index][0] == index, f"index mismatch {text_map[0][0]} != {index}"
+                            value = text_map[index][1][idx]
+                            meta_row_array.append(value)
+                        else:
+                            meta_row_array.append(active_rows[index][column])
 
-                        if (embedding_counter + skipped_zero_embedding_cnt) >= row_count:
-                            if (len(meta_array) > 0) and (len(embedding_array) > 0):
-                                streamer.stream_to_parquet(meta_array, embedding_array)
-                            return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
+                    meta_array.append(meta_row_array)
+                    embedding_array.append(embedding)
+                    embedding_counter += 1
+
+                    if ((embedding_counter >= row_count or last_row) and
+                            (len(meta_array) > 0) and (len(embedding_array) > 0)):
+                        streamer.stream_to_parquet(meta_array, embedding_array)
+                        return embedding_counter, detected_zero_embedding_cnt
 
             if (len(meta_array) > 0) and (len(embedding_array) > 0):
                 streamer.stream_to_parquet(meta_array, embedding_array)
@@ -261,7 +297,7 @@ def process_dataset(streamer, dataset, row_count, embedding_column, model_name, 
 
         row_counter += 1
 
-    return embedding_counter, detected_zero_embedding_cnt, skipped_zero_embedding_cnt
+    return embedding_counter, detected_zero_embedding_cnt
 
 
 def write_to_parquet(source, columns, meta_array, embedding_array):
@@ -301,9 +337,7 @@ class ParquetStreamer:
     def stream_to_parquet(self, meta_array, embedding_array):
         meta_array = np.array(meta_array)
         embedding_array = np.array(embedding_array)
-
         meta_columns = self.columns.copy()
-
         for i in range(embedding_array.shape[1]):
             meta_columns.append(f"embedding_{i}")
 
@@ -319,15 +353,26 @@ class ParquetStreamer:
 
         self.writer.write_table(table)
 
+    def stream_to_parquet_without_src_metadata(self, embedding_array):
+        assert len(self.columns) == len(embedding_array[0]), f"column count mismatch: {len(self.columns)} != {len(embedding_array[0])}"
+
+        embedding_array = np.array(embedding_array)
+        df = pd.DataFrame(embedding_array.astype('float32'), columns=self.columns)
+        table = pa.Table.from_pandas(df)
+
+        if self.writer is None:
+            self.writer = pq.ParquetWriter(self.filename, table.schema)
+
+        self.writer.write_table(table)
+
     def close(self):
         if self.writer:
             self.writer.close()
             print(f"Finished streaming to {self.filename}")
 
 
-def generate_query_dataset(data_dir, row_count, model_name, output_dimension, skip_zero_vec=True):
-    source = "query_vector"
-    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_{source}_data_{row_count}.parquet'
+def generate_query_dataset(data_dir, model_name, row_count, output_dimension):
+    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_query_vector_data_{row_count}.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -336,31 +381,27 @@ def generate_query_dataset(data_dir, row_count, model_name, output_dimension, sk
     full_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
     print("-- processing full query dataset")
-    processed_count, detected_count, skipped_count = process_dataset(streamer,
-                                                                     full_dataset,
-                                                                     row_count,
-                                                                     "question",
-                                                                     model_name,
-                                                                     output_dimension,
-                                                                     skip_zero_vec)
-    if not skip_zero_vec:
-        print(f"   totally processed {processed_count} embeddings so far, including {detected_count} zero embeddings)")
-        assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
-    else:
-        print(f"   totally processed {processed_count} non-zero embeddings and skipped {skipped_count} out of {detected_count} zero embeddings")
+    processed_count, detected_count = process_dataset(streamer,
+                                                      full_dataset,
+                                                      row_count,
+                                                      "question",
+                                                      model_name,
+                                                      output_dimension)
+    assert processed_count <= row_count, f"Expected {row_count} rows, got {processed_count} rows."
+    print(
+        f"   totally processed {processed_count} non-zero embeddings and skipped {detected_count} zero embeddings")
 
     streamer.close()
 
     return filename
 
 
-def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name, output_dimension, skip_zero_vec=True):
+def generate_base_dataset(data_dir, model_name, query_vector_filename, row_count, output_dimension):
     processed_count = 0
     detected_zero_count = 0
     skipped_zero_count = 0
 
-    source = "base_vector"
-    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_{source}_data_{row_count}.parquet'
+    filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_base_vector_data_{row_count}.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -373,7 +414,6 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
     full_dataset = datasets.load_dataset(BASE_DATASET,
                                          BASE_CONFIG,
                                          cache_dir=".cache",
-                                         beam_runner='DirectRunner',
                                          trust_remote_code=True,
                                          split='train')
     streamer = ParquetStreamer(filename, full_dataset.column_names)
@@ -393,19 +433,13 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
         print(f"   no matching base title for query titles {query_titles}")
     else:
         print("-- processing filtered base dataset 1 (title in)")
-        processed_count, detected_zero_count, skipped_zero_count = \
-            process_dataset(streamer,
-                            filtered_dataset,
-                            row_count,
-                            "text",
-                            model_name,
-                            output_dimension,
-                            skip_zero_vec)
-        if not skip_zero_vec:
-            print(f"   so far processed {processed_count} embeddings, including {detected_zero_count} zero embeddings")
-        else:
-            print(f"   so far processed {processed_count} non-zero embeddings and skipped {skipped_zero_count} out of {detected_zero_count} zero embeddings")
-
+        processed_count, detected_zero_count = process_dataset(streamer,
+                                                               filtered_dataset,
+                                                               row_count,
+                                                               "text",
+                                                               model_name,
+                                                               output_dimension)
+        print(f"   so far processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     if row_count > processed_count:
@@ -420,22 +454,16 @@ def generate_base_dataset(data_dir, query_vector_filename, row_count, model_name
 
         print("-- processing filtered base dataset 2 (title not in)")
         # filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
-        p2, d2, s2 = process_dataset(streamer,
+        p2, d2 = process_dataset(streamer,
                                  filtered_dataset,
                                  row_count - processed_count,
                                  "text",
                                  model_name,
-                                 output_dimension,
-                                 skip_zero_vec)
+                                 output_dimension)
         processed_count += p2
         detected_zero_count += d2
-        skipped_zero_count += s2
-
-        if not skip_zero_vec:
-            print(f"   totally processed {processed_count} embeddings, including {detected_zero_count} zero embeddings")
-            assert processed_count == row_count, f"Expected {row_count} rows, got {processed_count} rows."
-        else:
-            print(f"   totally processed {processed_count} non-zero embeddings and skipped {skipped_zero_count} zero embeddings")
+        print(f"   totally processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
+        assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     streamer.close()
 

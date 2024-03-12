@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 from neighborhoodwatch.parquet_to_format import \
     generate_query_vectors_fvec, generate_indices_ivec, \
     generate_base_vectors_fvec, generate_distances_fvec, \
-    count_vectors, get_nth_vector, dot_product, generate_hdf5_file
+    count_vectors, get_nth_vector, dot_product, generate_hdf5_file, generate_ivec_fvec_files
 
 import tests.conftest as test_settings
 
@@ -89,90 +89,88 @@ def generate_test_files(query_count,
 
 
 def test_generate_indices_ivec():
-    indices_parquet_filename = 'final_indices.parquet'
+    indices_parquet_filename = f"{dummy_model_name}_{dimensions}_final_indices.parquet"
 
-    if f"{dummy_model_name}_{dimensions}_{indices_parquet_filename}" not in os.listdir(test_settings.test_dataset_dir):
+    if indices_parquet_filename not in os.listdir(test_settings.test_dataset_dir):
         generate_test_files(query_count,
                             base_count,
                             dimensions,
                             k,
-                            indices_parquet_filename=f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{indices_parquet_filename}")
+                            indices_parquet_filename=f"{test_settings.test_dataset_dir}/{indices_parquet_filename}")
     
     filename = generate_indices_ivec(test_settings.test_dataset_dir, 
-                                     f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{indices_parquet_filename}",
+                                     f"{test_settings.test_dataset_dir}/{indices_parquet_filename}",
                                      base_count, 
                                      query_count, 
                                      k, 
                                      dummy_model_name,
                                      dimensions)
     
-    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{base_count}_indices_query_{query_count}.ivec"
+    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}.ivec"
     assert count_vectors(test_settings.test_dataset_dir, filename) == base_count
 
 
 def test_generate_distances_fvec():
-    distances_parquet_filename = 'final_distances.parquet'
+    distances_parquet_filename = f"{dummy_model_name}_{dimensions}_final_distances.parquet"
 
-    if f"{dummy_model_name}_{dimensions}_{distances_parquet_filename}" not in os.listdir(test_settings.test_dataset_dir):
+    if distances_parquet_filename not in os.listdir(test_settings.test_dataset_dir):
         generate_test_files(query_count,
                             base_count,
                             dimensions,
                             k,
-                            distances_parquet_filename=f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{distances_parquet_filename}")
+                            distances_parquet_filename=f"{test_settings.test_dataset_dir}/{distances_parquet_filename}")
     
     filename = generate_distances_fvec(test_settings.test_dataset_dir, 
-                                       f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{distances_parquet_filename}",
+                                       f"{test_settings.test_dataset_dir}/{distances_parquet_filename}",
                                        base_count, 
                                        query_count, 
                                        k, 
                                        dummy_model_name,
                                        dimensions)
     
-    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{base_count}_distances_{query_count}.fvec"
+    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_distances_b{base_count}_q{query_count}_k{k}.fvec"
     assert count_vectors(test_settings.test_dataset_dir, filename) == base_count
 
 
 def test_generate_query_vectors_fvec():
-    query_vectors_parquet_filename = 'query_vectors.parquet'
-    
-    if f"{dummy_model_name}_{dimensions}_{query_vectors_parquet_filename}" not in os.listdir(test_settings.test_dataset_dir):
+    query_vectors_parquet_filename = f"{dummy_model_name}_{dimensions}_query_vectors.parquet"
+
+    if query_vectors_parquet_filename not in os.listdir(test_settings.test_dataset_dir):
         generate_test_files(query_count,
                             base_count,
                             dimensions,
                             k,
-                            query_vectors_parquet_filename=f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{query_vectors_parquet_filename}")
+                            query_vectors_parquet_filename=f"{test_settings.test_dataset_dir}/{query_vectors_parquet_filename}")
     
-    filename = generate_query_vectors_fvec(test_settings.test_dataset_dir,
-                                           f"{test_settings.test_dataset_dir}/{dummy_model_name}_{query_vectors_parquet_filename}", 
-                                           base_count, 
-                                           query_count,
-                                           dummy_model_name,
-                                           dimensions)
-    
-    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{base_count}_query_vectors_{query_count}.fvec"
+    filename, _ = generate_query_vectors_fvec(test_settings.test_dataset_dir,
+                                               f"{test_settings.test_dataset_dir}/{query_vectors_parquet_filename}",
+                                               query_count,
+                                               dummy_model_name,
+                                               dimensions)
+    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_query_vectors_{query_count}.fvec"
     assert count_vectors(test_settings.test_dataset_dir, filename) == query_count
 
 
 def test_generate_base_vectors_fvec():
-    base_vectors_parquet_filename = 'base_vectors.parquet'    
-    
-    if f"{dummy_model_name}_{dimensions}_{base_vectors_parquet_filename}" not in os.listdir(test_settings.test_dataset_dir):
+    base_vectors_parquet_filename = f"{dummy_model_name}_{dimensions}_base_vectors.parquet"
+
+    if base_vectors_parquet_filename not in os.listdir(test_settings.test_dataset_dir):
         generate_test_files(query_count,
                             base_count,
                             dimensions,
                             k,
-                            base_vectors_parquet_filename=f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{base_vectors_parquet_filename}")
-    
-    filename = generate_base_vectors_fvec(test_settings.test_dataset_dir, 
-                                          f"{test_settings.test_dataset_dir}/{dummy_model_name}_{base_vectors_parquet_filename}", 
-                                          base_count,
-                                          dummy_model_name,
-                                          dimensions)
-    
-    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_{base_count}_base_vectors.fvec"
+                            base_vectors_parquet_filename=f"{test_settings.test_dataset_dir}/{base_vectors_parquet_filename}")
+
+    filename, _ = generate_base_vectors_fvec(test_settings.test_dataset_dir,
+                                              f"{test_settings.test_dataset_dir}/{base_vectors_parquet_filename}",
+                                              base_count,
+                                              dummy_model_name,
+                                              dimensions)
+
+    assert filename == f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_base_vectors_{base_count}.fvec"
     assert count_vectors(test_settings.test_dataset_dir, filename) == base_count
 
-    table = pq.read_table(f"{test_settings.test_dataset_dir}/{dummy_model_name}_{base_vectors_parquet_filename}")
+    table = pq.read_table(f"{test_settings.test_dataset_dir}/{base_vectors_parquet_filename}")
     for i in range(len(table)):
         vec_vector = get_nth_vector(test_settings.test_dataset_dir, filename, i)
         #assert len(vec_vector) == len(parquet_vector), "expected {} but got {}".format(len(vec_vector), len(parquet_vector))
@@ -188,18 +186,30 @@ def test_generate_hdf5():
     test_generate_distances_fvec()
     test_generate_query_vectors_fvec()
     test_generate_base_vectors_fvec()
-    
+
+    query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
+        generate_ivec_fvec_files(test_settings.test_dataset_dir,
+                                 dummy_model_name,
+                                 dimensions,
+                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_base_vectors.parquet",
+                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_query_vectors.parquet",
+                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_indices.parquet",
+                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_distances.parquet",
+                                 base_count,
+                                 query_count,
+                                 k)
+
     generate_hdf5_file(test_settings.test_dataset_dir,
                        dummy_model_name,
                        dimensions,
-                       f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_base_vectors.parquet",
-                       f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_query_vectors.parquet",
+                       base_df_hdf5,
+                       query_df_hdf5,
                        f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_indices.parquet",
                        f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_distances.parquet",
                        base_count,
                        query_count,
                        k)
-    hdf5_filename = f"{dummy_model_name}_{dimensions}_base_{base_count}_query_{query_count}.hdf5"
+    hdf5_filename = f"{dummy_model_name}_{dimensions}_base_{base_count}_query_{query_count}_k{k}.hdf5"
     assert os.path.exists(f"{test_settings.test_dataset_dir}/{hdf5_filename}")
 
     f = h5py.File(f"{test_settings.test_dataset_dir}/{hdf5_filename}", 'r')
@@ -227,39 +237,38 @@ def compute_similarities(dataset_dir, query_vector, filename, indexes):
     print(f"Failed count {failed_count} out of {len(indexes)}")
 
 
-
 def test_similarity():
-    test_generate_indices_ivec()
-    test_generate_query_vectors_fvec()
-    test_generate_base_vectors_fvec()
+    # test_generate_indices_ivec()
+    # test_generate_query_vectors_fvec()
+    # test_generate_base_vectors_fvec()
 
-    ivec_index_filename = f"{dummy_model_name}_{dimensions}_{base_count}_indices_query_{query_count}.ivec"
-    fvec_query_vector_filename = f"{dummy_model_name}_{dimensions}_{base_count}_query_vectors_{query_count}.fvec"
-    fvec_base_vector_filename = f"{dummy_model_name}_{dimensions}_{base_count}_query_vectors_{query_count}.fvec"
-    
+    ivec_index_filename = f"{dummy_model_name}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}.ivec"
+    fvec_query_vector_filename = f"{dummy_model_name}_{dimensions}_query_vectors_{query_count}.fvec"
+    fvec_base_vector_filename = f"{dummy_model_name}_{dimensions}_query_vectors_{query_count}.fvec"
+
     for n in range(count_vectors(test_settings.test_dataset_dir, fvec_query_vector_filename)):
         nth_query_vector = get_nth_vector(test_settings.test_dataset_dir, fvec_query_vector_filename, n)
         first_indexes = get_nth_vector(test_settings.test_dataset_dir, ivec_index_filename, n)
         compute_similarities(test_settings.test_dataset_dir,
-                             nth_query_vector, 
-                             fvec_base_vector_filename, 
+                             nth_query_vector,
+                             fvec_base_vector_filename,
                              first_indexes)
 
 
 def test_actual_similarity():
-    test_generate_indices_ivec()
-    test_generate_query_vectors_fvec()
-    test_generate_base_vectors_fvec()
+    # test_generate_indices_ivec()
+    # test_generate_query_vectors_fvec()
+    # test_generate_base_vectors_fvec()
 
     ##
     # NOTE: this requires the actual dataset to be generated first
     #       by running the following command:
-    #       'poetry run nw 100 10000 768 -k 100 -m 'intfloat/e5-base-v2' --disable-memory-tuning'
+    #          poetry run nw 100 1000 -k 100 -m 'intfloat/e5-base-v2' --data-dir knn_dataset
     #
-    ivec_index_filename = f"intfloat_e5-base-v2_10000_indices_query_100.ivec"
-    fvec_query_vector_filename = f"intfloat_e5-base-v2_10000_query_vectors_100.fvec"
-    fvec_base_vector_filename = f"intfloat_e5-base-v2_10000_base_vectors.fvec"
-    actual_dataset_dir = 'knn_dataset'
+    ivec_index_filename = f"intfloat_e5-base-v2_768_indices_b1000_q100_k100.ivec"
+    fvec_query_vector_filename = f"intfloat_e5-base-v2_768_query_vectors_100.fvec"
+    fvec_base_vector_filename = f"intfloat_e5-base-v2__768_base_vectors_1000.fvec"
+    actual_dataset_dir = 'knn_dataset/intfloat_e5-base-v2/q100_b1000_k100'
 
     if os.path.exists(actual_dataset_dir) and \
        os.path.exists(f"{actual_dataset_dir}/{ivec_index_filename}") and \
@@ -269,6 +278,6 @@ def test_actual_similarity():
             nth_query_vector = get_nth_vector(actual_dataset_dir, fvec_query_vector_filename, n)
             first_indexes = get_nth_vector(actual_dataset_dir, ivec_index_filename, n)
             compute_similarities(actual_dataset_dir,
-                                 nth_query_vector, 
-                                 fvec_base_vector_filename, 
+                                 nth_query_vector,
+                                 fvec_base_vector_filename,
                                  first_indexes)

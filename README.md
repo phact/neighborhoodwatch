@@ -31,7 +31,7 @@ poetry lock && poetry install
 Then run the program with `poetry run nw <input parameter list>` command. The available input parameter list is as below:
 ```
 $ poetry run nw -h
-usage: nw [-h] [-m MODEL_NAME] [-rd REDUCED_DIMENSION_SIZE] [-k K] [--data_dir DATA_DIR] [--skip-zero-vec | --no-skip-zero-vec] [--use-dataset-api | --no-use-dataset-api] [--gen-hdf5 | --no-gen-hdf5]
+usage: nw [-h] [-m MODEL_NAME] [-rd REDUCED_DIMENSION_SIZE] [-k K] [--data_dir DATA_DIR] [--use-dataset-api | --no-use-dataset-api] [--gen-hdf5 | --no-gen-hdf5]
           [--post-validation | --no-post-validation] [--enable-memory-tuning] [--disable-memory-tuning]
           query_count base_count
 
@@ -49,8 +49,6 @@ options:
                         Reduced (output) dimension size. Only supported in models (e.g. OpenAI text-embedding-3-xxx) that have this feature. Ignored otherwise!
   -k K, --k K           number of neighbors to compute per query vector
   --data_dir DATA_DIR   Directory to store the generated data (default: knn_dataset)
-  --skip-zero-vec, --no-skip-zero-vec
-                        Skip generating zero vectors when failing to retrieve the embedding (default: True) (default: True)
   --use-dataset-api, --no-use-dataset-api
                         Use 'pyarrow.dataset' API to read the dataset (default: True). Recommended for large datasets. (default: False)
   --gen-hdf5, --no-gen-hdf5

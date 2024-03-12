@@ -37,19 +37,19 @@ def read_ifvec_parquet_with_proper_schema(filename):
     return ifvec_table
 
 
-def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
-    model_prefix = get_model_prefix(model_name)
-
-    file_count = get_file_count(data_dir, model_prefix, output_dimension)
+def merge_indices_and_distances(data_dir,
+                                model_prefix,
+                                input_dimension,
+                                final_indices_filename,
+                                final_distances_filename,
+                                k=100):
+    file_count = get_file_count(data_dir, model_prefix, input_dimension)
     if file_count > 0:
-        indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_indices0.parquet")
-        distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_distances0.parquet")
+        indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_indices0.parquet")
+        distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
         batch_count = math.ceil(len(indices_table) / batch_size)
-
-        final_indices_filename = f"{data_dir}/{model_prefix}_{output_dimension}_final_indices.parquet"
-        final_distances_filename = f"{data_dir}/{model_prefix}_{output_dimension}_final_distances.parquet"
 
         final_indices_writer = pq.ParquetWriter(final_indices_filename, indices_table.schema)
         final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
@@ -60,8 +60,8 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
             final_distances = pd.DataFrame()
 
             for i in range(file_count):
-                indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet")
-                distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet")
+                indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_indices{i}.parquet")
+                distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_distances{i}.parquet")
 
                 if start != batch_count:
                     indices_batch = indices_table.slice(start, batch_size).to_pandas()
@@ -70,7 +70,7 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
                     indices_batch = indices_table.slice(start, len(indices_table) - start * batch_size)
                     distances_batch = distances_table.slice(start, len(distances_table) - start * batch_size)
 
-                if ((final_indices.empty) & (final_distances.empty)):
+                if final_indices.empty & final_distances.empty:
                     final_indices = indices_batch
                     final_distances = distances_batch
                 else:
@@ -94,10 +94,12 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
                     sorted_indices_np = np.take_along_axis(concatenated_indices_np, sorted_indices_np, axis=1)
 
                     # Convert the numpy arrays back to DataFrames only when necessary
-                    sorted_distances = pd.DataFrame(sorted_distances_np, index=concatenated_distances.index,
+                    sorted_distances = pd.DataFrame(sorted_distances_np,
+                                                    index=concatenated_distances.index,
                                                     columns=concatenated_distances.columns)
-                    sorted_indices = pd.DataFrame(sorted_indices_np, index=concatenated_indices.index,
-                                                columns=concatenated_indices.columns)
+                    sorted_indices = pd.DataFrame(sorted_indices_np,
+                                                  index=concatenated_indices.index,
+                                                  columns=concatenated_indices.columns)
 
                     # Select the top K distances and corresponding indices for each row
                     final_distances = sorted_distances.iloc[:, :k]
@@ -115,7 +117,3 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
 
         final_indices_writer.close()
         final_distances_writer.close()
-
-
-if __name__ == "__main__":
-    merge_indices_and_distances('.', 'intfloat/e5-query-v2', 10)

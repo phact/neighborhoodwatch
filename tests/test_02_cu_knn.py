@@ -88,9 +88,11 @@ def test_cu_knn():
     compute_knn(test_settings.test_dataset_dir,
                 dummy_model_name,
                 dimensions,
-                f"{dummy_model_name}_{query_vector_filename}", 
-                query_count, 
-                f"{dummy_model_name}_{base_vector_filename}", 
-                base_count, 
-                False,
-                k)
+                f"{dummy_model_name}_{query_vector_filename}",
+                query_count,
+                f"{dummy_model_name}_{base_vector_filename}",
+                base_count,
+                test_settings.get_final_indices_filename(dummy_model_name, dimensions),
+                test_settings.get_final_distances_filename(dummy_model_name, dimensions),
+                mem_tune=False,
+                k=k)
