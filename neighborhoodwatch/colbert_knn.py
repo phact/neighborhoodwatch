@@ -281,12 +281,12 @@ def main():
         description="""ck (Colbert KNN) uses GPU acceleration to generate ground truth KNN datasets with Colbert embeddings.""",
         epilog="""
 Some example commands:\n
-    ckef 100000 1000000 -k 100 --disable-memory-tuning
+    ck 100000 1000000 -k 100 --disable-memory-tuning
         """, formatter_class=KeepLineBreaksFormatter)
     parser.add_argument('query_token_count', type=int, help="number of query token vectors to generate")
     parser.add_argument('base_token_count', type=int, help="number of base token vectors to generate")
-    parser.add_argument('-m', '--model_name', type=str, default="Colbertv2.0",
-                        help='Colbert model name (default: Colbertv2.0)')
+    parser.add_argument('-m', '--model_name', type=str, default="colbertv2.0",
+                        help='Colbert model name (default: colbertv2.0)')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('-es', '--embedding_scale', type=str, default="medium",
                         help='Embedding scale. Options: small (10000), medium(100000), large (1000000) (default: medium)')
@@ -394,7 +394,6 @@ Some example commands:\n
     src_base_dataset = datasets.load_dataset(BASE_DATASET,
                                              BASE_CONFIG,
                                              cache_dir=".cache",
-                                             beam_runner='DirectRunner',
                                              trust_remote_code=True,
                                              split='train')
 

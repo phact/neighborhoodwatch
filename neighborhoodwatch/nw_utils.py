@@ -57,6 +57,8 @@ def get_embedding_size(model_name: str, reduced_dimension_size=None):
         default_model_dimension = 384
     elif model_name == 'colbertv2.0':
         default_model_dimension = 128
+    elif model_name == 'nvidia-nemo':
+        default_model_dimension = 1024
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
 
@@ -69,6 +71,31 @@ def get_embedding_size(model_name: str, reduced_dimension_size=None):
             return default_model_dimension
     else:
         return default_model_dimension
+
+
+# def get_recommended_sentence_batch_size(model_name):
+#     sentence_batch_size = 10000
+#
+#     if model_name == 'text-embedding-ada-002':
+#         sentence_batch_size = 2046
+#     elif model_name == 'text-embedding-3-small':
+#         sentence_batch_size = 8191
+#     elif model_name == 'text-embedding-3-large':
+#         sentence_batch_size = 8191
+#     elif model_name == 'textembedding-gecko':
+#         sentence_batch_size = 3072
+#     elif model_name == 'intfloat/e5-large-v2':
+#         sentence_batch_size = 512
+#     elif model_name == 'intfloat/e5-base-v2':
+#         sentence_batch_size = 512
+#     elif model_name == 'intfloat/e5-small-v2':
+#         sentence_batch_size = 512
+#     elif model_name == 'nvidia-nemo':
+#         sentence_batch_size = 512
+#     else:
+#         raise ValueError(f"Unsupported model_name: {model_name}")
+#
+#     return sentence_batch_size
 
 
 def get_full_filename(data_dir, filename):

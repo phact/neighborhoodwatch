@@ -45,8 +45,6 @@ Some example commands:\n
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
-    parser.add_argument('--skip-zero-vec', action=argparse.BooleanOptionalAction, default=True,
-                        help='Skip generating zero vectors when failing to retrieve the embedding (default: True)')
     parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=False,
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True,
@@ -71,7 +69,6 @@ Some example commands:\n
 * model name: `{args.model_name}`\n
 * reduced (output) dimension size: `{args.reduced_dimension_size} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
 --- behavior specification ---\n
-* skip zero vector: `{args.skip_zero_vec}`\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
 * post validation: `{args.post_validation}`\n
@@ -91,8 +88,7 @@ Some example commands:\n
     query_filename = generate_query_dataset(data_dir,
                                             args.model_name,
                                             args.query_count,
-                                            reduced_dimension,
-                                            args.skip_zero_vec)
+                                            reduced_dimension)
 
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
@@ -104,8 +100,7 @@ Some example commands:\n
                                           args.model_name,
                                           query_filename,
                                           args.base_count,
-                                          reduced_dimension,
-                                          args.skip_zero_vec)
+                                          reduced_dimension)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
