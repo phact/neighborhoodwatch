@@ -1,8 +1,7 @@
-
 import tests.conftest as test_settings
 
 from neighborhoodwatch.generate_dataset import generate_query_dataset, generate_base_dataset, get_embeddings_from_map, \
-    EmbeddingGenerator, VertexAIEmbeddingGenerator, OpenAIEmbeddingGenerator, IntfloatE5EmbeddingGenerator
+    VertexAIEmbeddingGenerator, OpenAIEmbeddingGenerator, IntfloatE5EmbeddingGenerator
 
 
 def test_generate_query_dataset():

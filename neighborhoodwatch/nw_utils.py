@@ -1,4 +1,5 @@
 from datasets import get_dataset_config_names
+import numpy as np
 
 BASE_DATASET = "wikipedia"
 BASE_DATASET_LANG = "en"
@@ -111,3 +112,21 @@ def get_model_prefix(model_name):
     else:
         model_prefix = "text-embedding-ada-002"
     return model_prefix
+
+
+def remove_duplicate_embeddings(embedding_array):
+    cnt1 = len(embedding_array)
+    embedding_array = list(set(map(tuple, embedding_array)))
+    cnt2 = len(embedding_array)
+
+    return embedding_array, cnt1 - cnt2,
+
+
+def is_zero_embedding(embedding):
+    return not np.any(embedding)
+
+
+def normalize_vector(vector):
+    assert not is_zero_embedding(vector), "Zero vector found!"
+    norm = np.linalg.norm(vector)
+    return (vector / norm).astype(np.float32)

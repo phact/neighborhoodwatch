@@ -1,8 +1,7 @@
 import struct
 import numpy as np
 import pandas as pd
-import h5py
-import sys
+
 
 def read_fvec(filename):
     vectors = []
@@ -20,6 +19,7 @@ def read_fvec(filename):
 
     return pd.DataFrame(np.array(vectors))
 
+
 def read_ivec(filename):
     vectors = []
 
@@ -36,12 +36,13 @@ def read_ivec(filename):
 
     return pd.DataFrame(np.array(vectors))
 
+
 def main():
-   filename = '/path/to/your/fvec/file.fvec'
-   query_df = read_fvec(filename)
-   print(f"query fvec file: {filename}")
-   print(f"shape: {query_df.shape}")
-   print(f"{query_df.head()}")
+    filename = '/path/to/your/fvec/file.fvec'
+    query_df = read_fvec(filename)
+    print(f"query fvec file: {filename}")
+    print(f"shape: {query_df.shape}")
+    print(f"{query_df.head()}")
 
 
 if __name__ == "__main__":

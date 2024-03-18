@@ -167,7 +167,6 @@ def get_dataset_columns(dataset, n):
 
 
 def compute_knn_ds(data_dir,
-                   model_prefix,
                    dimensions,
                    query_filename,
                    query_count,
@@ -203,10 +202,7 @@ def compute_knn_ds(data_dir,
     # batch_count = math.ceil(len(base_dataset) / batch_size)
     assert (base_count % batch_size == 0) or k <= (base_count % batch_size), f"Cannot generate k of {k} with only {base_count} rows and batch_size of {batch_size}."
     
-    process_dataset_batches(data_dir,
-                            model_prefix,
-                            dimensions,
-                            final_indecies_filename,
+    process_dataset_batches(final_indecies_filename,
                             final_distances_filename,
                             base_dataset, 
                             base_column_names,
@@ -228,10 +224,7 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_dataset_batches(data_dir,
-                            model_prefix,
-                            output_dimension,
-                            final_indecies_filename,
+def process_dataset_batches(final_indecies_filename,
                             final_distances_filename,
                             base_dataset, 
                             base_column_names,
