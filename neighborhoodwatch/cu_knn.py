@@ -147,7 +147,6 @@ def prep_table(data_dir, filename, count, input_dimension):
 
 
 def compute_knn(data_dir,
-                model_prefix,
                 input_dimensions,
                 query_filename,
                 query_count,

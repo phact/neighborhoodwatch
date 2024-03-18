@@ -42,11 +42,16 @@ def merge_indices_and_distances(data_dir,
                                 input_dimension,
                                 final_indices_filename,
                                 final_distances_filename,
-                                k=100):
+                                k=100,
+                                normalize_embed=False):
     file_count = get_file_count(data_dir, model_prefix, input_dimension)
     if file_count > 0:
-        indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_indices0.parquet")
-        distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_distances0.parquet")
+        indices_table = read_ifvec_parquet_with_proper_schema(
+            f"{data_dir}/{model_prefix}_{input_dimension}_indices0.parquet" if not normalize_embed else
+            f"{data_dir}/{model_prefix}_{input_dimension}_normalized_indices0.parquet")
+        distances_table = read_ifvec_parquet_with_proper_schema(
+            f"{data_dir}/{model_prefix}_{input_dimension}_distances0.parquet" if not normalize_embed else
+            f"{data_dir}/{model_prefix}_{input_dimension}_normalized_distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
         batch_count = math.ceil(len(indices_table) / batch_size)
@@ -60,8 +65,12 @@ def merge_indices_and_distances(data_dir,
             final_distances = pd.DataFrame()
 
             for i in range(file_count):
-                indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_indices{i}.parquet")
-                distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/{model_prefix}_{input_dimension}_distances{i}.parquet")
+                indices_table = read_ifvec_parquet_with_proper_schema(
+                    f"{data_dir}/{model_prefix}_{input_dimension}_indices{i}.parquet" if not normalize_embed else
+                    f"{data_dir}/{model_prefix}_{input_dimension}_normalized_indices{i}.parquet")
+                distances_table = read_ifvec_parquet_with_proper_schema(
+                    f"{data_dir}/{model_prefix}_{input_dimension}_distances{i}.parquet" if not normalize_embed else
+                    f"{data_dir}/{model_prefix}_{input_dimension}_normalized_distances{i}.parquet")
 
                 if start != batch_count:
                     indices_batch = indices_table.slice(start, batch_size).to_pandas()

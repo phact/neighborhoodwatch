@@ -8,6 +8,7 @@ from neighborhoodwatch.parquet_to_format import \
     generate_query_vectors_fvec, generate_indices_ivec, \
     generate_base_vectors_fvec, generate_distances_fvec, \
     count_vectors, get_nth_vector, dot_product, generate_hdf5_file, generate_ivec_fvec_files
+from neighborhoodwatch.nw_utils import normalize_vector
 
 import tests.conftest as test_settings
 
@@ -17,14 +18,6 @@ query_count = 100
 base_count = 1000
 dimensions = 384
 k = 10
-
-
-def normalize_vector(row):
-    vector = row.values
-    norm = np.linalg.norm(vector)
-    if norm == 0:  # prevent division by zero
-        return vector
-    return (vector / norm).astype(np.float32)
 
 
 def generate_test_files(query_count,

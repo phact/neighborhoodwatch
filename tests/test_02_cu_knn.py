@@ -3,15 +3,8 @@ import numpy as np
 import pandas as pd
 
 from neighborhoodwatch.cu_knn import compute_knn
+from neighborhoodwatch.nw_utils import normalize_vector
 import tests.conftest as test_settings
-
-
-def normalize_vector(row):
-    vector = row.values
-    norm = np.linalg.norm(vector)
-    if norm == 0:  # prevent division by zero
-        return vector
-    return (vector / norm).astype(np.float32)
 
 
 def generate_test_files(query_vectors_parquet_filename, 

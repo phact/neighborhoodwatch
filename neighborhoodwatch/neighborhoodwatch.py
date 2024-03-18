@@ -45,6 +45,8 @@ Some example commands:\n
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
+    parser.add_argument('--norm-embed', action=argparse.BooleanOptionalAction, default=False,
+                        help='Normalize the returned model embeddings (default: False)')
     parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=False,
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True,
@@ -68,6 +70,8 @@ Some example commands:\n
 * base vector count: `{args.base_count}`\n
 * model name: `{args.model_name}`\n
 * reduced (output) dimension size: `{args.reduced_dimension_size} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
+* K: `{args.k}`\n
+* normalize embeddings: `{args.norm_embed}`\n
 --- behavior specification ---\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
@@ -88,7 +92,8 @@ Some example commands:\n
     query_filename = generate_query_dataset(data_dir,
                                             args.model_name,
                                             args.query_count,
-                                            reduced_dimension)
+                                            reduced_dimension,
+                                            args.norm_embed)
 
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
@@ -100,7 +105,8 @@ Some example commands:\n
                                           args.model_name,
                                           query_filename,
                                           args.base_count,
-                                          reduced_dimension)
+                                          reduced_dimension,
+                                          args.norm_embed)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -108,14 +114,20 @@ Some example commands:\n
     cleanup_partial_parquet()
 
     rprint(Markdown("**Computing knn ......** "), '')
-    final_indecies_filename = get_full_filename(data_dir,
-                                                f"{model_prefix}_{reduced_dimension}_final_indices_query{args.query_count}_k{args.k}.parquet")
-    final_distances_filename = get_full_filename(data_dir,
-                                                 f"{model_prefix}_{reduced_dimension}_final_distances_query{args.query_count}_k{args.k}.parquet")
+    if not args.norm_embed:
+        final_indecies_filename = get_full_filename(data_dir,
+                                                    f"{model_prefix}_{reduced_dimension}_final_indices_query{args.query_count}_k{args.k}.parquet")
+        final_distances_filename = get_full_filename(data_dir,
+                                                     f"{model_prefix}_{reduced_dimension}_final_distances_query{args.query_count}_k{args.k}.parquet")
+    else:
+        final_indecies_filename = get_full_filename(data_dir,
+                                                    f"{model_prefix}_{reduced_dimension}_final_indices_query{args.query_count}_k{args.k}_normalized.parquet")
+        final_distances_filename = get_full_filename(data_dir,
+                                                     f"{model_prefix}_{reduced_dimension}_final_distances_query{args.query_count}_k{args.k}_normalized.parquet")
+
     section_time = time.time()
     if args.use_dataset_api:
         compute_knn_ds(data_dir,
-                       model_prefix,
                        reduced_dimension,
                        query_filename,
                        args.query_count,
@@ -127,7 +139,6 @@ Some example commands:\n
                        args.k)
     else:
         compute_knn(data_dir,
-                    model_prefix,
                     reduced_dimension,
                     query_filename,
                     args.query_count,
@@ -148,7 +159,8 @@ Some example commands:\n
                                 reduced_dimension,
                                 final_indecies_filename,
                                 final_distances_filename,
-                                args.k)
+                                args.k,
+                                args.norm_embed)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -165,7 +177,8 @@ Some example commands:\n
                                  final_distances_filename,
                                  args.base_count,
                                  args.query_count,
-                                 args.k)
+                                 args.k,
+                                 args.norm_embed)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -182,7 +195,8 @@ Some example commands:\n
                            final_distances_filename,
                            args.base_count,
                            args.query_count,
-                           args.k)
+                           args.k,
+                           args.norm_embed)
         rprint(Markdown(
             f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
         rprint(Markdown("---"), '')
