@@ -21,6 +21,8 @@ from vertexai.preview.language_models import TextEmbeddingModel
 
 from neighborhoodwatch.nw_utils import *
 
+import cohere
+
 nlp = spacy.blank(f"{BASE_DATASET_LANG}")
 nlp.add_pipe("sentencizer")
 
@@ -40,15 +42,14 @@ class EmbeddingGenerator(ABC):
         self.normalize_embed = normalize_embed
 
     @abstractmethod
-    def get_embedding_from_model(self, text):
+    def get_embedding_from_model(self, text, *args, **kwargs):
         pass
 
-    def generate_embedding(self, text):
-        embeddings = self.get_embedding_from_model(text)
+    def generate_embedding(self, text, *args, **kwargs):
+        embeddings = self.get_embedding_from_model(text, *args, **kwargs)
         if self.normalize_embed:
             embeddings = [normalize_vector(embedding) for embedding in embeddings]
         return embeddings
-
 
     # def simulate_zero_embedding(self, text):
     #     zero_vectors = [np.zeros(self.dimensions) for _ in range(len(text))]
@@ -82,7 +83,7 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
         elif self.model_name == "text-embedding-3-large":
             return 3072
 
-    def get_embedding_from_model(self, text):
+    def get_embedding_from_model(self, text, *args, **kwargs):
         # Ensure the text is a list of sentences
         if isinstance(text, str):
             text = [text]
@@ -104,7 +105,7 @@ class VertexAIEmbeddingGenerator(EmbeddingGenerator):
         self.client = TextEmbeddingModel.from_pretrained(model_name)
         super().__init__(model_name, 768, 256, normalize_embed)
 
-    def get_embedding_from_model(self, text):
+    def get_embedding_from_model(self, text, *args, **kwargs):
         # Ensure the text is a list of sentences
         if isinstance(text, str):
             text = [text]
@@ -116,11 +117,15 @@ class VertexAIEmbeddingGenerator(EmbeddingGenerator):
 
 
 class IntfloatE5EmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self, model_name='e5-v2-small', normalize_embed=False):
+    def __init__(self, model_name='intfloat/e5-small-v2', normalize_embed=False):
+        assert (model_name == "intfloat/e5-small-v2" or
+                model_name == "intfloat/e5-base-v2" or
+                model_name == "intfloat/e5-large-v2")
+
         self.model = SentenceTransformer(model_name)
         super().__init__(model_name, self.model.get_sentence_embedding_dimension(), 256, normalize_embed)
 
-    def get_embedding_from_model(self, text):
+    def get_embedding_from_model(self, text, *args, **kwargs):
         # Ensure the text is a list of sentences
         if isinstance(text, str):
             text = [text]
@@ -139,7 +144,7 @@ class NvdiaNemoEmbeddingGenerator(EmbeddingGenerator):
         self.embedding_srv_url = embedding_srv_url
         self.stand_headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
 
-    def get_embedding_from_model(self, text):
+    def get_embedding_from_model(self, text, *args, **kwargs):
         # Ensure the text is a list of sentences
         if isinstance(text, str):
             text = [text]
@@ -160,6 +165,37 @@ class NvdiaNemoEmbeddingGenerator(EmbeddingGenerator):
             raise Exception(f"Failed to get embeddings from {self.model_name} with response: {response}")
 
 
+class CohereEmbeddingV3Generator(EmbeddingGenerator):
+    def __init__(self, model_name='cohere/embed-english-v3.0', normalize_embed=False):
+        assert (model_name == "cohere/embed-english-v3.0" or
+                model_name == "cohere/embed-english-light-3.0")
+
+        super().__init__(model_name, get_embedding_size(model_name), 256, normalize_embed)
+
+        if os.getenv("COHERE_API_KEY") is None:
+            raise ValueError("COHERE_API_KEY environment variable is not set")
+        else:
+            self.co_client = cohere.Client(api_key=os.getenv("COHERE_API_KEY"))
+
+        # remove the leading "cohere/" from the model name
+        self.model_name = model_name.split("/")[1]
+
+    def get_embedding_from_model(self, text, *args, **kwargs):
+        # Ensure the text is a list of sentences
+        if isinstance(text, str):
+            text = [text]
+
+        valid_input_types = ["search_query", "search_document", "classification", "clustering"]
+
+        input_type = kwargs.get("input_type")
+        assert (input_type is not None and
+                input_type in valid_input_types), \
+            "input_type is required for Cohere embeddings and must be one of: " + ", ".join(valid_input_types)
+
+        output = self.co_client.embed(texts=text, model=self.model_name, input_type=input_type)
+        return np.array(output.embeddings)
+
+
 def split_into_sentences(text):
     # if type(text) == pa.lib.StringScalar:
     #     text = text.as_py()
@@ -167,7 +203,9 @@ def split_into_sentences(text):
     return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
 
 
-def get_batch_embeddings_from_generator(text_list, generator):
+def get_batch_embeddings_from_generator(text_list, generator, dataset_type):
+    assert dataset_type in ["query", "document"]
+
     embeddings = []
     chunk_size = generator.chunk_size
     total_items = len(text_list)
@@ -185,7 +223,14 @@ def get_batch_embeddings_from_generator(text_list, generator):
             if "e5" in generator.model_name:
                 process = ["query:" + s for s in process]
 
-            response = generator.generate_embedding(process)
+            if isinstance(generator, CohereEmbeddingV3Generator):
+                if dataset_type == "query":
+                    response = generator.generate_embedding(process, input_type="search_query")
+                else:
+                    response = generator.generate_embedding(process, input_type="search_document")
+            else:
+                response = generator.generate_embedding(process)
+
             for item in response:
                 # if len(item) != generator.model.get_sentence_embedding_dimension():
                 #    print("got a bad embedding from SentenceTransformer, skipping it:")
@@ -204,9 +249,10 @@ def get_batch_embeddings_from_generator(text_list, generator):
     return embeddings, zero_vec_cnt
 
 
-def get_embeddings_from_map(text_map, generator):
+def get_embeddings_from_map(text_map, generator, dataset_type):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
-    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator)
+
+    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator, dataset_type)
     if zero_embedding_cnt > 0:
         print(f"   [warn] failed to get total {zero_embedding_cnt} embeddings!")
 
@@ -214,7 +260,8 @@ def get_embeddings_from_map(text_map, generator):
     return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map], zero_embedding_cnt
 
 
-def process_dataset(streamer,
+def process_dataset(dataset_type,
+                    streamer,
                     dataset,
                     row_count,
                     embedding_column,
@@ -261,11 +308,16 @@ def process_dataset(streamer,
             # Nvidia Nemo (local embedding server)
             elif model_name == "nvidia-nemo":
                 generator = NvdiaNemoEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+            # Cohere English V3.0 model
+            elif model_name == "cohere/embed-english-v3.0" or model_name == "cohere/embed-english-light-3.0":
+                generator = CohereEmbeddingV3Generator(model_name=model_name,
+                                                       normalize_embed=normalize)
+
             # Default to Huggingface mode e5-small-v2
             else:
                 generator = IntfloatE5EmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
 
-            embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
+            embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map(text_map, generator, dataset_type)
             detected_zero_embedding_cnt += zero_embedding_cnt
 
             # for embedding_tuple in tqdm(embedding_tuple_list):
@@ -405,7 +457,8 @@ def generate_query_dataset(data_dir,
     full_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
     print("-- processing full query dataset")
-    processed_count, detected_count = process_dataset(streamer,
+    processed_count, detected_count = process_dataset('query',
+                                                      streamer,
                                                       full_dataset,
                                                       row_count,
                                                       "question",
@@ -465,7 +518,8 @@ def generate_base_dataset(data_dir,
         print(f"   no matching base title for query titles {query_titles}")
     else:
         print("-- processing filtered base dataset 1 (title in)")
-        processed_count, detected_zero_count = process_dataset(streamer,
+        processed_count, detected_zero_count = process_dataset('document',
+                                                               streamer,
                                                                filtered_dataset,
                                                                row_count,
                                                                "text",
@@ -487,7 +541,8 @@ def generate_base_dataset(data_dir,
 
         print("-- processing filtered base dataset 2 (title not in)")
         # filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
-        p2, d2 = process_dataset(streamer,
+        p2, d2 = process_dataset('document',
+                                 streamer,
                                  filtered_dataset,
                                  row_count - processed_count,
                                  "text",
