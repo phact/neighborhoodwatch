@@ -72,10 +72,10 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
         assert (model_name == "text-embedding-ada-002" or
                 model_name == "text-embedding-3-small" or
                 model_name == "text-embedding-3-large")
-        assert (reduced_dimension_size <= self.default_model_dimension_size())
-
-        self.client = OpenAI()
         super().__init__(model_name, reduced_dimension_size, 256, normalize_embed)
+
+        assert (reduced_dimension_size <= self.default_model_dimension_size())
+        self.client = OpenAI()
 
     def default_model_dimension_size(self):
         if self.model_name == "text-embedding-ada-002" or self.model_name == "text-embedding-3-small":
