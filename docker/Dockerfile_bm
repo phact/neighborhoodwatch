@@ -29,6 +29,10 @@ ENV UBUNTU_VERSION=22.04 \
 RUN wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.1-1_all.deb
 RUN dpkg -i cuda-keyring_1.1-1_all.deb
 
+# Avoid asking for console input during docker build.
+# Previously the apt step #17 210.3 Setting up keyboard-configuration (1.205ubuntu3) ... would block awaiting input
+RUN echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+
 RUN apt update \
     && apt -y install cuda-12-2 cuda-toolkit-12-2 \
     && apt install -y libcudnn8=8.9.6.50-1+cuda12.2 libcudnn8-dev=8.9.6.50-1+cuda12.2 libcudnn8-samples=8.9.6.50-1+cuda12.2 \
