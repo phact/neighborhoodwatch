@@ -32,6 +32,8 @@ valid_names = ['text-embedding-ada-002',
                'text-embedding-3-small',
                'text-embedding-3-large',
                'textembedding-gecko',
+               'text-multilingual-embedding',
+               'text-embedding-004',
                'intfloat/e5-large-v2',
                'intfloat/e5-base-v2',
                'intfloat/e5-small-v2',
@@ -50,7 +52,7 @@ def get_embedding_size(model_name: str, reduced_dimension_size=None):
     elif model_name == 'text-embedding-3-large':
         default_model_dimension = 3072
     # VertexAI embedding models
-    elif model_name == 'textembedding-gecko':
+    elif model_name == 'textembedding-gecko' or model_name == 'text-multilingual-embedding' or model_name == 'text-embedding-004':
         default_model_dimension = 768
     # HuggingFace embedding models
     elif model_name == 'intfloat/e5-large-v2':

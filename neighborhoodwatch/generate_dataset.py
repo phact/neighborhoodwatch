@@ -101,9 +101,12 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
 
 
 class VertexAIEmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self, model_name='textembedding-gecko', normalize_embed=False):
+    def __init__(self, model_name='text-embedding-004', normalize_embed=False):
+        assert (model_name == "textembedding-gecko" or
+                model_name == "text-multilingual-embedding" or
+                model_name == "text-embedding-004")
         self.client = TextEmbeddingModel.from_pretrained(model_name)
-        super().__init__(model_name, 768, 256, normalize_embed)
+        super().__init__(model_name, 768, 128, normalize_embed)
 
     def get_embedding_from_model(self, text, *args, **kwargs):
         # Ensure the text is a list of sentences
@@ -241,7 +244,8 @@ def get_batch_embeddings_from_generator(text_list, generator, dataset_type):
                 embeddings.append(item)
         except Exception as e:
             print(f"   failed to get embeddings for text chunk (length: {len(process)}) with error: {e}")
-            # When allowed, append zero vector(s) to the result if API call fails
+            zero_vec_cnt = zero_vec_cnt + 1
+            # zero embeddings will be skipped in the output parquet file
             for _ in process:
                 embeddings.append(zero_vector)
             continue
@@ -295,7 +299,7 @@ def process_dataset(dataset_type,
             sentence_batch_counter = 0
 
             # Vertex AI
-            if model_name == 'textembedding-gecko':
+            if model_name == 'textembedding-gecko' or model_name == 'text-multilingual-embedding' or model_name == 'text-embedding-004':
                 generator = VertexAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
             # OpenAI, older model (ada-002)
             elif model_name == "text-embedding-ada-002":
