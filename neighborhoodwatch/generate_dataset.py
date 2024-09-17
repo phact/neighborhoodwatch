@@ -325,8 +325,8 @@ def split_into_sentences(text):
     return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
 
 
-def get_batch_embeddings_from_generator(text_list, generator, dataset_type):
-    assert dataset_type in ["query", "document"]
+def get_batch_embeddings_from_generator(text_list, generator, dataset_type = None):
+    assert dataset_type in ["query", "document", None]
 
     embeddings = []
     chunk_size = generator.chunk_size
@@ -348,8 +348,10 @@ def get_batch_embeddings_from_generator(text_list, generator, dataset_type):
             if isinstance(generator, CohereEmbeddingV3Generator):
                 if dataset_type == "query":
                     response = generator.generate_embedding(process, input_type="search_query")
-                else:
+                elif dataset_type == "document":
                     response = generator.generate_embedding(process, input_type="search_document")
+                else:
+                    response = generator.generate_embedding(process)
             else:
                 response = generator.generate_embedding(process)
 
@@ -372,7 +374,7 @@ def get_batch_embeddings_from_generator(text_list, generator, dataset_type):
     return embeddings, zero_vec_cnt
 
 
-def get_embeddings_from_map(text_map, generator, dataset_type):
+def get_embeddings_from_map(text_map, generator, dataset_type = None):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
 
     embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator,
