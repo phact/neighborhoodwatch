@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 from datasets import get_dataset_config_names
 import numpy as np
 
@@ -40,7 +42,9 @@ valid_names = ['text-embedding-ada-002',
                'colbertv2.0',
                'nividia-nemo',
                'cohere/embed-english-v3.0',
-               'cohere/embed-english-light-3.0']
+               'cohere/embed-english-light-3.0',
+               'jinaai/jina-embeddings-v2-small-en',
+               'jinaai/jina-embeddings-v2-base-en']
 
 
 # Programmatically get the embedding size from the model name
@@ -61,12 +65,19 @@ def get_embedding_size(model_name: str, reduced_dimension_size=None):
         default_model_dimension = 768
     elif model_name == 'intfloat/e5-small-v2':
         default_model_dimension = 384
+    # Colbert models
     elif model_name == 'colbertv2.0':
         default_model_dimension = 128
+    # Cohere models
     elif model_name == 'cohere/embed-english-v3.0':
         default_model_dimension = 1024
     elif model_name == 'cohere/embed-english-light-3.0':
         default_model_dimension = 384
+    # JinaAI models
+    elif model_name == 'jinaai/jina-embeddings-v2-small-en':
+        default_model_dimension = 512
+    elif model_name == 'jinaai/jina-embeddings-v2-base-en':
+        default_model_dimension = 768
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
 
@@ -96,12 +107,15 @@ def get_model_prefix(model_name):
     return model_prefix
 
 
-def remove_duplicate_embeddings(embedding_array):
-    cnt1 = len(embedding_array)
-    embedding_array = list(set(map(tuple, embedding_array)))
-    cnt2 = len(embedding_array)
+def remove_duplicate_embeddings(source_array):
+    cnt1 = len(source_array)
+    ## don't maintain the original order
+    # unique_array = list(set(map(tuple, source_array)))
+    ## maintain the original order
+    unique_array = list(OrderedDict.fromkeys(map(tuple, source_array)))
+    cnt2 = len(unique_array)
 
-    return embedding_array, cnt1 - cnt2,
+    return unique_array, cnt1 - cnt2,
 
 
 def is_zero_embedding(embedding):

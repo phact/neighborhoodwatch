@@ -17,6 +17,7 @@ import requests
 from openai import OpenAI
 
 from sentence_transformers import SentenceTransformer
+from transformers import AutoModel, AutoTokenizer
 from vertexai.preview.language_models import TextEmbeddingModel
 
 from neighborhoodwatch.nw_utils import *
@@ -35,7 +36,11 @@ datasets.logging.set_verbosity_warning()
 
 
 class EmbeddingGenerator(ABC):
-    def __init__(self, model_name, dimensions, chunk_size, normalize_embed):
+    def __init__(self,
+                 model_name: str,
+                 dimensions: int,
+                 chunk_size: int,
+                 normalize_embed: bool):
         self.model_name = model_name
         self.dimensions = dimensions
         self.chunk_size = chunk_size
@@ -68,7 +73,10 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
     * text-embedding-3-large - default dimension size: 3072 (support reduced output dimension size)
     """
 
-    def __init__(self, model_name='text-embedding-ada-002', reduced_dimension_size=1536, normalize_embed=False):
+    def __init__(self,
+                 model_name='text-embedding-ada-002',
+                 reduced_dimension_size=1536,
+                 normalize_embed=False):
         assert (model_name == "text-embedding-ada-002" or
                 model_name == "text-embedding-3-small" or
                 model_name == "text-embedding-3-large")
@@ -101,7 +109,9 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
 
 
 class VertexAIEmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self, model_name='text-embedding-004', normalize_embed=False):
+    def __init__(self,
+                 model_name='text-embedding-004',
+                 normalize_embed=False):
         assert (model_name == "textembedding-gecko" or
                 model_name == "text-multilingual-embedding" or
                 model_name == "text-embedding-004")
@@ -120,12 +130,14 @@ class VertexAIEmbeddingGenerator(EmbeddingGenerator):
 
 
 class IntfloatE5EmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self, model_name='intfloat/e5-small-v2', normalize_embed=False):
+    def __init__(self,
+                 model_name='intfloat/e5-small-v2',
+                 normalize_embed=False):
         assert (model_name == "intfloat/e5-small-v2" or
                 model_name == "intfloat/e5-base-v2" or
                 model_name == "intfloat/e5-large-v2")
 
-        self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(model_name, trust_remote_code=True)
         super().__init__(model_name, self.model.get_sentence_embedding_dimension(), 256, normalize_embed)
 
     def get_embedding_from_model(self, text, *args, **kwargs):
@@ -134,7 +146,7 @@ class IntfloatE5EmbeddingGenerator(EmbeddingGenerator):
             text = [text]
 
         # Generate embeddings
-        embeddings = self.model.encode(text)
+        embeddings = self.model.encode(text, normalize_embeddings=True)
         return embeddings
 
 
@@ -169,7 +181,9 @@ class NvdiaNemoEmbeddingGenerator(EmbeddingGenerator):
 
 
 class CohereEmbeddingV3Generator(EmbeddingGenerator):
-    def __init__(self, model_name='cohere/embed-english-v3.0', normalize_embed=False):
+    def __init__(self,
+                 model_name='cohere/embed-english-v3.0',
+                 normalize_embed=False):
         assert (model_name == "cohere/embed-english-v3.0" or
                 model_name == "cohere/embed-english-light-3.0")
 
@@ -197,6 +211,111 @@ class CohereEmbeddingV3Generator(EmbeddingGenerator):
 
         output = self.co_client.embed(texts=text, model=self.model_name, input_type=input_type)
         return np.array(output.embeddings)
+
+
+class JinaAIEmbeddingV2Generator(EmbeddingGenerator):
+    def __init__(self,
+                 model_name='jinaai/jina-embeddings-v2-base-en',
+                 normalize_embed=False,
+                 late_chunking=False):
+        assert (model_name == "jinaai/jina-embeddings-v2-small-en" or
+                model_name == "jinaai/jina-embeddings-v2-base-en")
+
+        self.model = AutoModel.from_pretrained(f'{model_name}', trust_remote_code=True)
+        self.tokenizer = self.model.tokenizer
+        # self.model = AutoModel.from_pretrained(f'{model_name}', trust_remote_code=True)
+        # self.tokenizer = AutoTokenizer.from_pretrained(f'{model_name}', trust_remote_code=True)
+        super().__init__(model_name, get_embedding_size(model_name), 256, normalize_embed)
+
+
+        ##
+        #  NOTE: 'late chunking' is currently only for Jinai's embedding models
+        #           see: https://github.com/jina-ai/late-chunking
+        #
+        #        but in theory, it should be applicable to other embedding models
+        #
+        #        for now, the "smaller" chunk size used in 'late chunking' is fixed
+        #        at 32. maybe we can make this configurable in the future.
+        #
+        self.late_chunking = late_chunking
+        self.late_chunking_size = 32
+        assert self.late_chunking_size <= self.chunk_size
+
+    ##
+    #  NOTE: Late chunking doesn't really work with the way NW is designed. Comment
+    #        these codes!
+    #
+    # def _chunk_by_tokens(self, input_text: str):
+    #     assert isinstance(input_text, str)
+    #
+    #     inputs = self.tokenizer(input_text, return_tensors='pt', return_offsets_mapping=True)
+    #     token_offsets = inputs['offset_mapping'][0]
+    #
+    #     chunks = []
+    #     span_annotations = []
+    #
+    #     for i in range(0, len(token_offsets), self.late_chunking_size):
+    #         chunk_end = min(i + self.late_chunking_size, len(token_offsets))
+    #         if chunk_end - i > 0:
+    #             start_offset = token_offsets[i][0]
+    #             end_offset = token_offsets[chunk_end - 1][1]
+    #             chunks.append(input_text[start_offset:end_offset])
+    #             span_annotations.append((i, chunk_end))
+    #
+    #     return chunks, span_annotations
+    #
+    # @staticmethod
+    # def _chunked_pooling(
+    #         model_output: 'BatchEncoding', span_annotation: list, max_length=None
+    # ):
+    #     token_embeddings = model_output[0]
+    #     outputs = []
+    #     for embeddings, annotations in zip(token_embeddings, span_annotation):
+    #         if (
+    #                 max_length is not None
+    #         ):  # remove annotations which go bejond the max-length of the model
+    #             annotations = [
+    #                 (start, min(end, max_length - 1))
+    #                 for (start, end) in annotations
+    #                 if start < (max_length - 1)
+    #             ]
+    #             pooled_embeddings = [
+    #                 embeddings[start:end].sum(dim=0) / (end - start)
+    #                 for start, end in annotations
+    #                 if (end - start) >= 1
+    #             ]
+    #             pooled_embeddings = [
+    #                 embedding.detach().cpu().numpy() for embedding in pooled_embeddings
+    #             ]
+    #             outputs.append(pooled_embeddings)
+    #
+    #     return outputs
+
+    def get_embedding_from_model(self, text, *args, **kwargs):
+        # Ensure the text is a list of sentences
+        if isinstance(text, str):
+            text = [text]
+
+        return self.model.encode(text)
+
+        ## Late chunking is really not working with NW
+        #
+        # if not self.late_chunking:
+        #     return self.model.encode(text)
+        # else:
+        #     # instead of doing multiple embeddings on multiple smaller text,
+        #     # do embedding only once for a much larger text and then do late chunking
+        #     large_text = ''.join(text)
+        #     text = [large_text]
+        #
+        #     result_embeddings = []
+        #     chunks, span_annotations = self._chunk_by_tokens(large_text)
+        #     inputs = self.tokenizer(text, return_tensors='pt')
+        #     model_output = self.model(**inputs)
+        #     chunked_embeddings = self._chunked_pooling(model_output, [span_annotations])
+        #     result_embeddings.append(chunked_embeddings)
+        #
+        #     return np.array(result_embeddings)
 
 
 def split_into_sentences(text):
@@ -256,7 +375,8 @@ def get_batch_embeddings_from_generator(text_list, generator, dataset_type):
 def get_embeddings_from_map(text_map, generator, dataset_type):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
 
-    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator, dataset_type)
+    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator,
+                                                                              dataset_type)
     if zero_embedding_cnt > 0:
         print(f"   [warn] failed to get total {zero_embedding_cnt} embeddings!")
 
@@ -287,6 +407,33 @@ def process_dataset(dataset_type,
     sentence_batch_counter = 0
     text_map = []
     active_rows = []
+
+    # Vertex AI
+    if model_name == 'textembedding-gecko' or model_name == 'text-multilingual-embedding' or model_name == 'text-embedding-004':
+        generator = VertexAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+    # OpenAI, older model (ada-002)
+    elif model_name == "text-embedding-ada-002":
+        generator = OpenAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+    # OpenAI, newer model (3-small, 3-large)
+    elif model_name == "text-embedding-3-small" or model_name == "text-embedding-3-large":
+        generator = OpenAIEmbeddingGenerator(model_name=model_name,
+                                             reduced_dimension_size=reduced_dimension,
+                                             normalize_embed=normalize)
+    # Nvidia Nemo (local embedding server)
+    elif model_name == "nvidia-nemo":
+        generator = NvdiaNemoEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+    # Cohere English V3.0 model
+    elif model_name == "cohere/embed-english-v3.0" or model_name == "cohere/embed-english-light-3.0":
+        generator = CohereEmbeddingV3Generator(model_name=model_name,
+                                               normalize_embed=normalize)
+    # JinaAI v2 models
+    elif model_name == "jinaai/jina-embeddings-v2-small-en" or model_name == "jinaai/jina-embeddings-v2-base-en":
+        generator = JinaAIEmbeddingV2Generator(model_name=model_name,
+                                               normalize_embed=normalize)
+    # Default to Huggingface mode e5-small-v2
+    else:
+        generator = IntfloatE5EmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+
     for row in tqdm(dataset):
         last_row = row_counter == len(dataset) - 1
         active_rows.append(row)
@@ -297,29 +444,6 @@ def process_dataset(dataset_type,
         i += 1
         if sentence_batch_counter >= sentence_batch_size or last_row:
             sentence_batch_counter = 0
-
-            # Vertex AI
-            if model_name == 'textembedding-gecko' or model_name == 'text-multilingual-embedding' or model_name == 'text-embedding-004':
-                generator = VertexAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
-            # OpenAI, older model (ada-002)
-            elif model_name == "text-embedding-ada-002":
-                generator = OpenAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
-            # OpenAI, newer model (3-small, 3-large)
-            elif model_name == "text-embedding-3-small" or model_name == "text-embedding-3-large":
-                generator = OpenAIEmbeddingGenerator(model_name=model_name,
-                                                     reduced_dimension_size=reduced_dimension,
-                                                     normalize_embed=normalize)
-            # Nvidia Nemo (local embedding server)
-            elif model_name == "nvidia-nemo":
-                generator = NvdiaNemoEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
-            # Cohere English V3.0 model
-            elif model_name == "cohere/embed-english-v3.0" or model_name == "cohere/embed-english-light-3.0":
-                generator = CohereEmbeddingV3Generator(model_name=model_name,
-                                                       normalize_embed=normalize)
-
-            # Default to Huggingface mode e5-small-v2
-            else:
-                generator = IntfloatE5EmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
 
             embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map(text_map, generator, dataset_type)
             detected_zero_embedding_cnt += zero_embedding_cnt
@@ -427,7 +551,8 @@ class ParquetStreamer:
         self.writer.write_table(table)
 
     def stream_to_parquet_without_src_metadata(self, embedding_array):
-        assert len(self.columns) == len(embedding_array[0]), f"column count mismatch: {len(self.columns)} != {len(embedding_array[0])}"
+        assert len(self.columns) == len(
+            embedding_array[0]), f"column count mismatch: {len(self.columns)} != {len(embedding_array[0])}"
 
         embedding_array = np.array(embedding_array)
         df = pd.DataFrame(embedding_array.astype('float32'), columns=self.columns)
@@ -530,7 +655,8 @@ def generate_base_dataset(data_dir,
                                                                model_name,
                                                                output_dimension,
                                                                normalize_embed)
-        print(f"   so far processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
+        print(
+            f"   so far processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     if row_count > processed_count:
@@ -555,7 +681,8 @@ def generate_base_dataset(data_dir,
                                  normalize_embed)
         processed_count += p2
         detected_zero_count += d2
-        print(f"   totally processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
+        print(
+            f"   totally processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     streamer.close()
