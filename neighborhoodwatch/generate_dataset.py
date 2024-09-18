@@ -202,6 +202,8 @@ class CohereEmbeddingV3Generator(EmbeddingGenerator):
 def split_into_sentences(text):
     # if type(text) == pa.lib.StringScalar:
     #     text = text.as_py()
+    if isinstance(text, dict) and 'text' in text:
+        text = text['text']
     doc = nlp(text)
     return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
 

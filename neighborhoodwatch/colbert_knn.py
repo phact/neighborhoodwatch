@@ -1,4 +1,5 @@
 import argparse
+import itertools
 from datetime import datetime
 
 import requests
@@ -23,7 +24,6 @@ import logging
 
 from pathlib import Path
 from torch import Tensor
-from tqdm import tqdm
 
 from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory, prep_table, process_batches
 from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
@@ -48,10 +48,6 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
                  download_pretrained_model=False,
                  chunk_size=300000,
                  normalize_embed=False):
-        # - In Colbert model, each input text token (NOTE not input text itself) corresponds to a "token" vector
-        #   with a smaller dimension size (e.g. 128). The total "dimension" size of the entire input text is
-        #   not fixed (depending on the tokens of the input text).
-        # - The number here refers to the "token" dimension size.
         super().__init__(model_name, 128, chunk_size, normalize_embed)
 
         self.local_model_base_dir = f".pretrained"
@@ -75,9 +71,7 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
                 model_url = "https://downloads.cs.stanford.edu/nlp/data/colbert/colbertv2/colbertv2.0.tar.gz"
                 response = session.get(url=model_url, stream=True)
                 with open(local_model_file, 'wb') as fh:
-                    # Walk through the request response in chunks of 1024 * 1024 * 1024 bytes, so 1 GB
                     for chunk in response.iter_content(1024 * 1024 * 1024):
-                        # Write the chunk to the file
                         fh.write(chunk)
 
             tar = tarfile.open(local_model_file)
@@ -87,20 +81,15 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
             raise RuntimeError(e)
 
     def get_embedding_from_model(self, text):
-        # Ensure the text is a list of sentences
         if isinstance(text, str):
             text = [text]
 
-        # Generate embeddings
         embeddings = []
-        for t in text:
-            # For each input text, the returned embedding is an 2-dimensional array with shape like <changing_num>x128,
-            # aka, it contains a series of token-vectors of the size 128.
-            tensor_embeddings, token_cnt = self.encoder.encode_passages(text)
-            np_embed = Tensor.numpy(tensor_embeddings)
-            embeddings.append(np_embed.flatten())
+        tensor_embeddings, token_cnt = self.encoder.encode_passages(text)
+        np_embed = Tensor.numpy(tensor_embeddings)
+        embeddings.append(np_embed.flatten())
 
-        return embeddings
+        return embeddings, token_cnt
 
 
 def process_source_dataset(streamer,
@@ -111,107 +100,54 @@ def process_source_dataset(streamer,
                            embedding_chunk_size,
                            column_to_embed,
                            normalize,
-                           remove_duplicates=False,
                            logger=None):
-    token_embedding_chk_dup_size = min(1000000, token_count)
 
-    cur_row = 0
-    row_count = len(dataset)
-    total_sentence_cnt = 0
-    total_duplicate_removed_cnt = 0
-    nodup_embedding_cnt = 0
-    last_nodup_embedding_cnt = 0
     processed_token_embedding_cnt = 0
-    processed_text_embedding_cnt = 0
     detected_zero_text_embedding_cnt = 0
+    total_sentence_cnt = 0
 
-    text_map = []
-    # may have duplicates
     embedding_array = []
-
+    
     if model_name == "colbertv2.0":
         generator = ColbertPreTrainedEmbeddingGenerator(chunk_size=embedding_chunk_size,
                                                         normalize_embed=normalize)
     else:
         assert False, f"Unsupported model name: {model_name}"
 
-    if logger is not None:
-        logger.info(f"row_count: {row_count}; token_count: {token_count}; embedding_chunk_size: {embedding_chunk_size}; remove_duplicates: {remove_duplicates}")
-
-    def break_out_of_loop():
-        exit_condition = cur_row >= row_count
-        if remove_duplicates:
-            exit_condition = exit_condition or nodup_embedding_cnt >= token_count
-        else:
-            exit_condition = exit_condition or processed_token_embedding_cnt >= token_count
-
-        if exit_condition:
-            return True
-
-    for row in dataset:
-        if break_out_of_loop():
-            break
-
-        cur_row += 1
-
+    # TODO: Batch this  for better perf
+    for cur_row, row in enumerate(dataset, start=1):  # Using enumerate to track current row
         sentence_list = split_into_sentences(row[column_to_embed])
-        text_map.append([cur_row, sentence_list])
-        total_sentence_cnt += len(sentence_list)
 
-        embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map(text_map, generator)
-        detected_zero_text_embedding_cnt += zero_embedding_cnt
-        text_map.clear()
+        #embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map([[cur_row, sentence_list]], generator)
+        embeddings, counts = generator.generate_embedding(sentence_list)
 
-        for embedding_tuple in tqdm(embedding_tuple_list):
-            embedding_list = embedding_tuple[1]
+        embeddings_length = len(embeddings)
+        #embeddings_length = 1
 
-            for embedding in embedding_list:
-                # Skip zero vectors completely
-                if is_zero_embedding(embedding):
-                    continue
+        for j in range(embeddings_length):
 
-                assert len(embedding) % input_dimensions == 0, \
-                    f"embedding dimension length {len(embedding)} is not a multiple of token embedding size {input_dimensions}"
+            # split the embeddings into token embeddings
+            token_embeddings = [embeddings[j][i * input_dimensions:(i + 1) * input_dimensions] for i in
+                            range(len(embeddings[j]) // input_dimensions)]
 
-                token_embedding_list = [embedding[i * input_dimensions:(i + 1) * input_dimensions] for i in
-                                        range((len(embedding) + input_dimensions - 1) // input_dimensions)]
+            for token_embedding in token_embeddings:
+                processed_token_embedding_cnt+= 1
+                embedding_array.append(token_embedding)  # Directly extending the list
+                if processed_token_embedding_cnt >= token_count:
+                    break  # Early exit if token count is reached
+            total_sentence_cnt += 1
 
-                processed_text_embedding_cnt += 1
-                for token_embedding in token_embedding_list:
-                    embedding_array.append(token_embedding)
-                    processed_token_embedding_cnt += 1
+        if processed_token_embedding_cnt >= token_count:
+            break  # Early exit if token count is reached
 
-                    # Remove duplicates duplicate check size
-                    if remove_duplicates and (processed_token_embedding_cnt % token_embedding_chk_dup_size == 0):
-                        embedding_array, removed_cnt = remove_duplicate_embeddings(embedding_array)
-                        nodup_embedding_cnt = len(embedding_array)
-                        total_duplicate_removed_cnt += removed_cnt
-                        if logger is not None and nodup_embedding_cnt != last_nodup_embedding_cnt:
-                            logger.info(f"[batch {processed_token_embedding_cnt//token_embedding_chk_dup_size}] processed_token_embedding_cnt: {processed_token_embedding_cnt}; nodup_embedding_cnt: {nodup_embedding_cnt}; total_duplicate_removed_cnt: {total_duplicate_removed_cnt}")
-                            last_nodup_embedding_cnt = nodup_embedding_cnt
 
-                    if break_out_of_loop():
-                        break
-
-                if break_out_of_loop():
-                    break
-
-            if break_out_of_loop():
-                break
-
-    if len(embedding_array) > 0:
+    if embedding_array:
         if logger is not None:
-            logger.info(
-                f"[final] processed_token_embedding_cnt: {processed_token_embedding_cnt}; nodup_embedding_cnt: {nodup_embedding_cnt}; total_duplicate_removed_cnt: {total_duplicate_removed_cnt}")
+            logger.info(f"[final] processed_token_embedding_cnt: {processed_token_embedding_cnt}")
         streamer.stream_to_parquet_without_src_metadata(embedding_array)
         embedding_array.clear()
 
-    return (cur_row,
-            total_sentence_cnt,
-            processed_text_embedding_cnt,
-            processed_token_embedding_cnt,
-            total_duplicate_removed_cnt,
-            detected_zero_text_embedding_cnt)
+    return (cur_row, total_sentence_cnt, processed_token_embedding_cnt, detected_zero_text_embedding_cnt)
 
 
 def process_knn_computation(base_filename,
@@ -220,15 +156,12 @@ def process_knn_computation(base_filename,
                             query_count,
                             final_indices_filename,
                             final_distances_filename,
-                            remove_duplicates,
                             mem_tune=False,
                             initial_batch_size=1000000,
                             max_memory_threshold=0.1,
                             k=100,
                             split=True):
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
-
-    remove_query_duplicate, remove_base_duplicate = remove_duplicates
 
     print(f"-- prepare query source table for brute-force KNN computation.")
     query_table = pq.read_table(query_filename).slice(0, query_count)
@@ -258,21 +191,15 @@ def print_dataset_info(source_dataset_name,
                        token_count,
                        actual_row_cnt,
                        actual_sentence_cnt,
-                       actual_embedding_counter,
                        actual_token_embedding_counter,
-                       detected_zero_embedding_cnt,
-                       remove_duplicates,
-                       duplicate_removed_cnt):
+                       detected_zero_embedding_cnt):
     print(f"=================================================")
     print(f"== '{source_dataset_name}' source dataset stats")
     print(f"== ----------------------------------------------")
     print(f"== Expected total count of source data tokens: {token_count}")
     print(f"== Total count of source data rows: {actual_row_cnt}")
     print(f"== Total count of sentences: {actual_sentence_cnt}")
-    print(f"== Total count of sentence-embeddings: {actual_embedding_counter}")
     print(f"== Total count of token-embeddings: {actual_token_embedding_counter}")
-    if remove_duplicates:
-        print(f"== Total count of duplicate token-embeddings removed: {duplicate_removed_cnt}")
     print(f"== Total count of detected zero sentence-embeddings: {detected_zero_embedding_cnt}")
     print(f"=================================================")
 
@@ -301,10 +228,6 @@ Some example commands:\n
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True,
                         help='Generate hdf5 files (default: True)')
-    parser.add_argument('--remove-query-duplicate', action=argparse.BooleanOptionalAction, default=False,
-                        help='Remove duplicate (token) embeddings in the query dataset (default: False)')
-    parser.add_argument('--remove-base-duplicate', action=argparse.BooleanOptionalAction, default=False,
-                        help='Remove duplicate (token) embeddings in the base dataset (default: False)')
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
     parser.add_argument('--disable-memory-tuning', action='store_false',
                         help='Disable memory tuning (useful for very small datasets)')
@@ -327,8 +250,6 @@ Some example commands:\n
 --- behavior specification ---\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
-* remove query duplicate (token) embeddings : `{args.remove_query_duplicate}`\n
-* remove base duplicate (token) embeddings : `{args.remove_base_duplicate}`\n
 * enable memory tuning: `{args.enable_memory_tuning}`
 """))
 
@@ -375,8 +296,8 @@ Some example commands:\n
     query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
     query_print_info = True
     if not os.path.exists(query_embed_token_filename):
-        (query_row_cnt, query_sentence_cnt, query_embed_cnt, query_embed_cnt_token,
-         query_duplicate_cnt, query_detected0cnt) = (
+        (query_row_cnt, query_sentence_cnt, query_embed_cnt_token,
+         query_detected0cnt) = (
             process_source_dataset(query_embed_streamer,
                                    src_query_dataset,
                                    args.model_name,
@@ -385,7 +306,6 @@ Some example commands:\n
                                    embedding_chunk_size,
                                    "question",
                                    args.norm_embed,
-                                   remove_duplicates=args.remove_query_duplicate,
                                    logger=logger))
     else:
         query_print_info = False
@@ -413,8 +333,8 @@ Some example commands:\n
     base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
     base_print_info = True
     if not os.path.exists(base_embed_token_filename):
-        (base_row_cnt, base_sentence_cnt, base_embed_cnt, base_embed_cnt_token,
-         base_duplicate_cnt, base_detected0cnt) = (
+        (base_row_cnt, base_sentence_cnt, base_embed_cnt_token,
+         base_detected0cnt) = (
             process_source_dataset(base_embed_streamer,
                                    src_base_dataset,
                                    args.model_name,
@@ -423,7 +343,6 @@ Some example commands:\n
                                    embedding_chunk_size,
                                    "text",
                                    args.norm_embed,
-                                   remove_duplicates=args.remove_base_duplicate,
                                    logger=logger))
     else:
         base_print_info = False
@@ -439,11 +358,8 @@ Some example commands:\n
                            args.query_token_count,
                            query_row_cnt,
                            query_sentence_cnt,
-                           query_embed_cnt,
                            query_embed_cnt_token,
-                           query_detected0cnt,
-                           args.remove_query_duplicate,
-                           query_duplicate_cnt)
+                           query_detected0cnt)
 
     if base_print_info:
         print("\n")
@@ -451,11 +367,8 @@ Some example commands:\n
                            args.base_token_count,
                            base_row_cnt,
                            base_sentence_cnt,
-                           base_embed_cnt,
                            base_embed_cnt_token,
-                           base_detected0cnt,
-                           args.remove_base_duplicate,
-                           base_duplicate_cnt)
+                           base_detected0cnt)
     print("\n")
 
     rprint(Markdown("---"), '')
@@ -479,7 +392,6 @@ Some example commands:\n
                             args.query_token_count,
                             final_indecies_filename,
                             final_distances_filename,
-                            remove_duplicates=(args.remove_query_duplicate, args.remove_base_duplicate),
                             mem_tune=args.enable_memory_tuning,
                             k=args.k)
     rprint(Markdown(
@@ -534,3 +446,6 @@ Some example commands:\n
                            args.norm_embed)
         rprint(Markdown(
             f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
+
+if __name__ == "__main__": 
+    main()
