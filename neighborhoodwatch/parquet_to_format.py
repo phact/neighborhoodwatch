@@ -301,10 +301,10 @@ def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, 
         for index in first_indexes:
             base_vector = get_nth_vector(data_dir, base_vector_fvec, index)
             similarity = dot_product(nth_query_vector, base_vector)
-            distance = 1 - distance_vector[col]
+            distance = distance_vector[col]
             assert distance >= last_distance, f"Expected distance {distance} to be greater than last distance {last_distance}"
             last_distance = distance
-            #assert similarity <= last_similarity, f"Expected similarity {similarity} to be less than last similarity {last_similarity}"
+            assert similarity-last_similarity <= 0 or np.isclose(similarity-last_similarity, 0, atol=1e-04), f"Expected similarity {similarity} to be greater than last similarity {last_similarity}\nDifference: {similarity - last_similarity}"
             last_similarity = similarity
             if not np.isclose((1-similarity), distance, atol=1e-04):
                 # start looking at cuvs
