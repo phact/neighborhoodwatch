@@ -27,10 +27,10 @@ scipy = "1.11.2"
 threadpoolctl = "3.2.0"
 tqdm = "4.66.1"
 treelite-runtime = "3.2.0"
-typing-extensions = "4.7.1"
 cudf-cu12 = {url = "https://pypi.nvidia.com/cudf-cu12/cudf_cu12-24.8.2-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=d93d3c6985d5ef180c68482915a14a0f2503f1d5c1b3c23333e56b9de28295a8"}
 dask-cudf-cu12 = {url = "https://pypi.nvidia.com/dask-cudf-cu12/dask_cudf_cu12-24.8.2-py3-none-any.whl"}
 cuml-cu12 = {url = "https://pypi.nvidia.com/cuml-cu12/cuml_cu12-24.8.0-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=5d2bac0155957058e3407bf1d7e53dbbda42dc0c50a0334dcf02ebe64d1c94fd"}
+cuvs-cu12 = {url = "https://pypi.nvidia.com/cuvs-cu12/cuvs_cu12-24.8.0-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=f5ed8a871a934f08d28e6b3d1d9243614fdd5a85c448e3291f395c3bea68a02d"}
 rich = "^13.6.0"
 spacy = "^3.7.1"
 en-core-web-sm = { url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.0/en_core_web_sm-3.7.0.tar.gz" }
@@ -44,6 +44,7 @@ protobuf = "4.24.3"
 colbert-ai = "^0.2.18 "
 cohere= "^5.1.6"
 
+torch = "^2.4.1"
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
 

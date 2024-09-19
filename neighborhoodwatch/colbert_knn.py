@@ -160,7 +160,11 @@ def process_knn_computation(base_filename,
                             initial_batch_size=1000000,
                             max_memory_threshold=0.1,
                             k=100,
-                            split=True):
+                            split=True,
+                            engine='torch'):
+    if engine == 'torch':
+        if initial_batch_size > 100000:
+            initial_batch_size = 100000
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     print(f"-- prepare query source table for brute-force KNN computation.")
@@ -184,7 +188,12 @@ def process_knn_computation(base_filename,
                     batch_count,
                     batch_size,
                     k,
-                    split)
+                    split,
+                    engine=engine
+                    #engine='torch'
+                    #engine='raft'
+                    #engine='cuvs'
+                    )
 
 
 def print_dataset_info(source_dataset_name,
@@ -231,6 +240,8 @@ Some example commands:\n
     parser.add_argument('--enable-memory-tuning', action='store_true', help='Enable memory tuning')
     parser.add_argument('--disable-memory-tuning', action='store_false',
                         help='Disable memory tuning (useful for very small datasets)')
+    parser.add_argument('--engine', type=str, default='torch',
+                        help='Pick raft, cuvs, or torch as the brute force knn engine')
 
     args = parser.parse_args()
 
@@ -251,6 +262,7 @@ Some example commands:\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
 * enable memory tuning: `{args.enable_memory_tuning}`
+* engine: `{args.engine}`
 """))
 
     model_prefix = get_model_prefix(args.model_name)
@@ -393,7 +405,8 @@ Some example commands:\n
                             final_indecies_filename,
                             final_distances_filename,
                             mem_tune=args.enable_memory_tuning,
-                            k=args.k)
+                            k=args.k,
+                            engine=args.engine)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
