@@ -268,8 +268,8 @@ def process_batches(final_indecies_filename,
                 query_tensor = from_dlpack(query.toDlpack())
                 dataset_tensor = from_dlpack(dataset.toDlpack())
 
-                distance_batch = torch.matmul(query_tensor, dataset_tensor.T)
-                distances_tensor, indices_tensor = torch.topk(distance_batch, k, dim=1, largest=True)
+                distance_batch = 1 - torch.matmul(query_tensor, dataset_tensor.T)
+                distances_tensor, indices_tensor = torch.topk(distance_batch, k, dim=1, largest=False)
 
                 cupydistances1 = cp.from_dlpack(distances_tensor)
                 cupyindices1 = cp.from_dlpack(indices_tensor)
