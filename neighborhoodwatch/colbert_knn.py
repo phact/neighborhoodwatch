@@ -164,7 +164,8 @@ def process_knn_computation(base_filename,
                             engine='porch'):
     if engine == 'torch':
         if initial_batch_size > 100000:
-            initial_batch_size = 10000
+            #initial_batch_size = 10000
+            initial_batch_size = 9000
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     print(f"-- prepare query source table for brute-force KNN computation.")
