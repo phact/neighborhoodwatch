@@ -14,18 +14,18 @@ from neighborhoodwatch.nw_utils import *
 
 
 def get_file_count(data_dir, model_prefix, dimensions):
-    str_pattern = r"" + data_dir + "/" + model_prefix + "_" + str(dimensions) + "_indices(\d+)\.parquet"
+    str_pattern = r"" + data_dir + "/" + model_prefix + "_" + str(dimensions) + "_.+indices.+(\d+)\.parquet"
     pattern = re.compile(str_pattern)
     file_count = 0
 
-    files = sorted(glob.glob(f"{data_dir}/{model_prefix}_{dimensions}_indices*.parquet"))
+    files = sorted(glob.glob(f"{data_dir}/{model_prefix}_{dimensions}*_indices*.parquet"))
     for filename in files:
         match = pattern.match(filename)
         if match:
             i = int(match.group(1))
             file_count = file_count + 1
     
-    return file_count
+    return file_count - 1
 
 
 def read_ifvec_parquet_with_proper_schema(filename):
@@ -47,10 +47,10 @@ def merge_indices_and_distances(data_dir,
     file_count = get_file_count(data_dir, model_prefix, input_dimension)
     if file_count > 0:
         indices_table = read_ifvec_parquet_with_proper_schema(
-            f"{data_dir}/{model_prefix}_{input_dimension}_indices0.parquet" if not normalize_embed else
+            f"{data_dir}/{model_prefix}_{input_dimension}_final_indices_query_token100000_k100_0.parquet" if not normalize_embed else
             f"{data_dir}/{model_prefix}_{input_dimension}_normalized_indices0.parquet")
         distances_table = read_ifvec_parquet_with_proper_schema(
-            f"{data_dir}/{model_prefix}_{input_dimension}_distances0.parquet" if not normalize_embed else
+            f"{data_dir}/{model_prefix}_{input_dimension}_final_distances_query_token100000_k100_0.parquet" if not normalize_embed else
             f"{data_dir}/{model_prefix}_{input_dimension}_normalized_distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
@@ -64,12 +64,12 @@ def merge_indices_and_distances(data_dir,
             final_indices = pd.DataFrame()
             final_distances = pd.DataFrame()
 
-            for i in range(file_count):
+            for i in tqdm(range(file_count)):
                 indices_table = read_ifvec_parquet_with_proper_schema(
-                    f"{data_dir}/{model_prefix}_{input_dimension}_indices{i}.parquet" if not normalize_embed else
+                    f"{data_dir}/{model_prefix}_{input_dimension}_final_indices_query_token100000_k100_{i}.parquet" if not normalize_embed else
                     f"{data_dir}/{model_prefix}_{input_dimension}_normalized_indices{i}.parquet")
                 distances_table = read_ifvec_parquet_with_proper_schema(
-                    f"{data_dir}/{model_prefix}_{input_dimension}_distances{i}.parquet" if not normalize_embed else
+                    f"{data_dir}/{model_prefix}_{input_dimension}_final_distances_query_token100000_k100_{i}.parquet" if not normalize_embed else
                     f"{data_dir}/{model_prefix}_{input_dimension}_normalized_distances{i}.parquet")
 
                 if start != batch_count:

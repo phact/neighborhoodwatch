@@ -1,5 +1,5 @@
 import sys
-
+import cupy as cp
 import h5py
 import numpy as np
 import pyarrow.parquet as pq
@@ -8,6 +8,12 @@ from rich import print as rprint
 from rich.markdown import Markdown
 import struct
 import os
+from cuvs.distance import pairwise_distance
+from cuvs.neighbors import brute_force
+import torch
+
+torch.device("cuda")
+
 
 from neighborhoodwatch.nw_utils import *
 
@@ -274,7 +280,7 @@ def write_hdf5(data_dir, df, filename, datasetname):
             f.create_dataset(datasetname, data=data)
 
 
-def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec):
+def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec, columns=None, input_parquet=None):
     zero_query_vector_count = 0
     total_query_vector_count = count_vectors(data_dir, query_vector_fvec)
     total_mismatch_count = 0
@@ -290,16 +296,58 @@ def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, 
             continue
 
         col = 0
+        last_distance = 0
+        last_similarity = 1
         for index in first_indexes:
             base_vector = get_nth_vector(data_dir, base_vector_fvec, index)
             similarity = dot_product(nth_query_vector, base_vector)
             distance = distance_vector[col]
-            if not np.isclose((1-similarity), distance/2):
+            assert distance >= last_distance, f"Expected distance {distance} to be greater than last distance {last_distance}"
+            last_distance = distance
+            assert similarity-last_similarity <= 0 or np.isclose(similarity-last_similarity, 0, atol=1e-04), f"Expected similarity {similarity} to be greater than last similarity {last_similarity}\nDifference: {similarity - last_similarity}"
+            last_similarity = similarity
+            if not np.isclose((1-similarity), distance, atol=1e-04):
+                # start looking at cuvs
+                output = cp.asarray(pairwise_distance(
+                    tuple_to_cuda_interface_array(nth_query_vector),
+                    tuple_to_cuda_interface_array(base_vector),
+                    metric="cosine"
+                ))[0][0]
+
+                full_base = read_and_extract(
+                    data_dir,
+                    input_parquet,
+                    count_vectors(data_dir, base_vector_fvec),
+                    len(nth_query_vector),
+                    columns
+                )
+                full_base_cp = cp.array(full_base.to_numpy(), order='C')
+                full_index = brute_force.build(full_base_cp, metric="cosine")
+                full_distances, full_neighbors = brute_force.search(full_index, tuple_to_cuda_interface_array(nth_query_vector), 100000)
+                this_index = cp.asarray(full_neighbors)[0].tolist().index(index)
+                full_brute_force_distance = cp.asarray(full_distances)[0][this_index]
+
+                search_index = brute_force.build(tuple_to_cuda_interface_array(base_vector), metric="cosine")
+                distances, neighbors = brute_force.search(search_index, tuple_to_cuda_interface_array(nth_query_vector), 1)
+                brute_force_distance = cp.asarray(distances)[0][0]
+
+                this_index = first_indexes.index(index)
+
+
+                distance_tensor = torch.matmul(torch.tensor(nth_query_vector, dtype=torch.float32), torch.tensor(base_vector, dtype=torch.float32))
+                distances_tensor, indices_tensor = torch.topk(distance_tensor, 1, largest=True)
+
                 total_mismatch_count += 1
-                print(f"Expected 1 - similarity {1-similarity} to equal distance {distance} for query vector {n} and base vector {index}")
-                print(f"Difference {1-similarity - distance/2}")
-                #print(base_vector)
-                #print(nth_query_vector)
+                print(f"torch {1-distances_tensor.item()} full {full_brute_force_distance} brute {brute_force_distance} distance {distance} similarity {1-similarity}")
+                #print(f"torch {1-distances_tensor.item()} brute {brute_force_distance} distance {distance} similarity {1-similarity}")
+                print(f"Expected 1 - similarity: {1-similarity} to equal distance: {distance} for query vector {n} and base vector {index}")
+                print(f"distance vs similarity diff: {distance - (1-similarity)}")
+                print(f"cuvs vs similarity diff: {output - (1-similarity)}")
+                print(f"brute vs similarity diff: {brute_force_distance - (1-similarity)}")
+                print(f"full brute vs similarity diff: {full_brute_force_distance - (1-similarity)}")
+                print(f"torch vs similarity diff: {distances_tensor.item()- similarity}")
+                print(base_vector)
+                print(nth_query_vector)
             col += 1
 
     print(f"Total mismatch count: {total_mismatch_count}")
@@ -308,3 +356,27 @@ def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, 
 def dot_product(A, B):
     return sum(a * b for a, b in zip(A, B))
 
+def tuple_to_cuda_interface_array(tuple_data, dtype=np.float32):
+    """
+    Converts a tuple of length 128 into a CuPy array (GPU compatible) with shape (1, 128).
+
+    Parameters:
+    tuple_data (tuple): A tuple of length 128.
+    dtype (type): The data type of the output array (e.g., np.float32, np.int8, np.uint8).
+
+    Returns:
+    cp.ndarray: A CuPy array (GPU memory) that is CUDA array interface compliant.
+    """
+    if len(tuple_data) != 128:
+        raise ValueError("The input tuple must have exactly 128 elements.")
+
+    # Convert the tuple to a numpy array with the given dtype
+    array_data = np.array(tuple_data, dtype=dtype)
+
+    # Reshape to (1, 128) to match the required (n_samples, dim) shape
+    array_data = array_data.reshape(1, 128)
+
+    # Convert the numpy array to a CuPy array (transfers to GPU memory)
+    cuda_array = cp.asarray(array_data)
+
+    return cuda_array

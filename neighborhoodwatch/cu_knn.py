@@ -1,3 +1,4 @@
+import os
 import cudf
 import pyarrow.parquet as pq
 import cupy as cp
@@ -7,6 +8,7 @@ import gc
 import math
 import numpy as np
 from pylibraft.neighbors.brute_force import knn
+from cuvs.neighbors import brute_force
 import rmm
 from rich import print as rprint
 from rich.markdown import Markdown
@@ -203,7 +205,14 @@ def process_batches(final_indecies_filename,
                     batch_count,
                     batch_size,
                     k,
-                    split):
+                    split,
+                    engine='raft'
+                    ):
+    try:
+        os.remove(final_indecies_filename.replace(".parquet", f"*.parquet"))
+        os.remove(final_distances_filename.replace(".parquet", f"*.parquet"))
+    except OSError:
+        pass
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
@@ -225,39 +234,74 @@ def process_batches(final_indecies_filename,
 
         distances = cudf.DataFrame()
         indices = cudf.DataFrame()
-        if split:
-            for i in tqdm(range(splits)):
-                offset = i * rows_per_split
-                length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
+        if not split:
+            splits = 1
 
-                query_batch = query_table.slice(offset, length)
+        for i in tqdm(range(splits)):
+            offset = i * rows_per_split
+            length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
-                df1 = cudf.DataFrame.from_arrow(query_batch)
-                df_numeric1 = df1.select_dtypes(['float32', 'float64'])
+            query_batch = query_table.slice(offset, length)
 
-                cleanup(df1)
-                query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
+            df1 = cudf.DataFrame.from_arrow(query_batch)
+            df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
-                assert (k <= len(dataset))
+            cleanup(df1)
+            query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
 
+            assert (k <= len(dataset))
+
+            print(f"Dataset shape: {dataset.shape}, Query shape: {query.shape}")
+            cupydistances1 = None
+            cupyindices1 = None
+            if engine == 'raft':
                 cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
-                                                   query.astype(np.float32),
-                                                   k)
+                                                    query.astype(np.float32),
+                                                    k)
+            elif engine == 'cuvs':
+                brute_force_index = brute_force.build(dataset, metric="cosine")
+                cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
+            elif engine == 'torch':
+                import torch
+                from torch.utils.dlpack import from_dlpack, to_dlpack
+                torch.device("cuda")
+                query_tensor = from_dlpack(query.toDlpack())
+                dataset_tensor = from_dlpack(dataset.toDlpack())
 
-                distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
-                # add batch_offset to indices
-                indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+                distance_batch = 1 - torch.matmul(query_tensor, dataset_tensor.T)
+                distances_tensor, indices_tensor = torch.topk(distance_batch, k, dim=1, largest=False)
 
-                distances = cudf.concat([distances, distances1], ignore_index=True)
-                indices = cudf.concat([indices, indices1], ignore_index=True)
+                cupydistances1 = cp.from_dlpack(distances_tensor)
+                cupyindices1 = cp.from_dlpack(indices_tensor)
 
-            distances.columns = distances.columns.astype(str)
-            indices.columns = indices.columns.astype(str)
+                cleanup(distance_batch, distances_tensor, indices_tensor)
+
+            #brute_force_index = brute_force.build(dataset.astype(np.float32), metric="cosine")
+            #brute_force_index = brute_force.build(dataset, metric="cosine")
+            #cp.cuda.Stream.null.synchronize()  # Synchronize after building the index
+            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query.astype(np.float32), k)
+            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
+            #cp.cuda.Stream.null.synchronize()  # Synchronize after search
+
+
+
+            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
+            # add batch_offset to indices
+            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+
+            distances = cudf.concat([distances, distances1], ignore_index=True)
+            indices = cudf.concat([indices, indices1], ignore_index=True)
+
+        distances.columns = distances.columns.astype(str)
+        indices.columns = indices.columns.astype(str)
 
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        stream_cudf_to_parquet(distances, 100000, final_distances_filename)
-        stream_cudf_to_parquet(indices, 100000, final_indecies_filename)
+        stream_cudf_to_parquet(distances, 100000, final_distances_filename.replace(".parquet", f"_{start}.parquet"))
+        stream_cudf_to_parquet(indices, 100000, final_indecies_filename.replace(".parquet", f"_{start}.parquet"))
 
         cleanup(df_numeric, distances, indices, dataset)
+    print("completed processing batches")
+    print("final distances shape: ", distances.shape)
+    print("final indices shape: ", indices.shape)

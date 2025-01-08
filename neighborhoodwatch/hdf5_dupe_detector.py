@@ -38,6 +38,7 @@ with h5py.File(file_path, "r") as hdf:
             duplicates = unique_rows[counts > 1]
             
             if len(duplicates) > 0:
+                print(f"Found {len(unique_rows)} unique rows:")
                 print(f"Found {len(duplicates)} duplicate rows:")
                 print(duplicates)
                 print(f"out of {len(data_array)} rows")
