@@ -44,12 +44,14 @@ valid_names = ['text-embedding-ada-002',
                'cohere/embed-english-v3.0',
                'cohere/embed-english-light-3.0',
                'jinaai/jina-embeddings-v2-small-en',
-               'jinaai/jina-embeddings-v2-base-en']
+               'jinaai/jina-embeddings-v2-base-en',
+               'voyage-3-large',
+               'voyage-3-lite']
 
 
 # Programmatically get the embedding size from the model name
 # No need for manual input of the dimensions
-def get_embedding_size(model_name: str, reduced_dimension_size=None):
+def get_embedding_size(model_name: str, output_dimension_size=None):
     # OpenAI embedding models
     if model_name == 'text-embedding-ada-002' or model_name == 'text-embedding-3-small':
         default_model_dimension = 1536
@@ -73,23 +75,22 @@ def get_embedding_size(model_name: str, reduced_dimension_size=None):
         default_model_dimension = 1024
     elif model_name == 'cohere/embed-english-light-3.0':
         default_model_dimension = 384
-    # JinaAI models
-    elif model_name == 'jinaai/jina-embeddings-v2-small-en':
+    elif model_name == 'voyage-3-large':
+        default_model_dimension = 1024
+    elif model_name == 'voyage-3-lite':
         default_model_dimension = 512
-    elif model_name == 'jinaai/jina-embeddings-v2-base-en':
-        default_model_dimension = 768
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
 
-    # Reduced output dimension only applies to OpenAI latest text embedding models
-    if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':
-        if reduced_dimension_size is not None:
-            assert (reduced_dimension_size <= default_model_dimension)
-            return min(default_model_dimension, reduced_dimension_size)
-        else:
-            return default_model_dimension
-    else:
-        return default_model_dimension
+    if output_dimension_size is not None:
+        if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':
+            assert (output_dimension_size <= default_model_dimension)
+            return output_dimension_size
+        elif model_name == 'voyage-3-large':
+            assert (output_dimension_size in [256, 512, 1024, 2048])
+            return output_dimension_size
+
+    return default_model_dimension
 
 
 def get_full_filename(data_dir, filename):

@@ -40,8 +40,10 @@ Some example commands:\n
     parser.add_argument('base_count', type=int, help="number of base vectors to generate")
     parser.add_argument('-m', '--model_name', type=str,
                         help='model name to use for generating embeddings, i.e. text-embedding-ada-002, textembedding-gecko, or intfloat/e5-large-v2')
-    parser.add_argument('-rd', '--reduced_dimension_size', type=int,
-                        help='Reduced (output) dimension size. Only supported in models (e.g. OpenAI text-embedding-3-xxx) that have this feature. Ignored otherwise!')
+    parser.add_argument('-ods', '--output_dimension_size', type=int,
+                        help="Output dimension size; can be different from model's default dimension size!")
+    parser.add_argument('-odt', '--output_dtype', type=str, default='float',
+                        help="Output dtype; currently only valid for VoyageAI model!")
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
@@ -69,7 +71,8 @@ Some example commands:\n
 * query count: `{args.query_count}`\n
 * base vector count: `{args.base_count}`\n
 * model name: `{args.model_name}`\n
-* reduced (output) dimension size: `{args.reduced_dimension_size} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
+* output dimension size: `{args.output_dimension_size}`\n
+* output dtype: `{args.output_dtype}` (currently only relevant for VoyageAI models)\n
 * K: `{args.k}`\n
 * normalize embeddings: `{args.norm_embed}`\n
 --- behavior specification ---\n
@@ -85,15 +88,20 @@ Some example commands:\n
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
 
-    reduced_dimension = get_embedding_size(args.model_name)
+    output_dimension = get_embedding_size(args.model_name, args.output_dimension_size)
+    output_dtype = None
+    if args.model_name.startswith('voyage'):
+        output_dtype = args.output_dtype
+        assert output_dtype in ['float', 'int8', 'uint8', 'binary', 'ubinary']
 
     rprint(Markdown("**Generating query dataset ......** "), '')
     section_time = time.time()
     query_filename = generate_query_dataset(data_dir,
                                             args.model_name,
                                             args.query_count,
-                                            reduced_dimension,
-                                            args.norm_embed)
+                                            output_dimension,
+                                            args.norm_embed,
+                                            output_dtype)
 
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
@@ -105,8 +113,9 @@ Some example commands:\n
                                           args.model_name,
                                           query_filename,
                                           args.base_count,
-                                          reduced_dimension,
-                                          args.norm_embed)
+                                          output_dimension,
+                                          args.norm_embed,
+                                          output_dtype)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -114,21 +123,25 @@ Some example commands:\n
     cleanup_partial_parquet()
 
     rprint(Markdown("**Computing knn ......** "), '')
-    if not args.norm_embed:
-        final_indecies_filename = get_full_filename(data_dir,
-                                                    f"{model_prefix}_{reduced_dimension}_final_indices_query{args.query_count}_k{args.k}.parquet")
-        final_distances_filename = get_full_filename(data_dir,
-                                                     f"{model_prefix}_{reduced_dimension}_final_distances_query{args.query_count}_k{args.k}.parquet")
+
+    if output_dtype is not None:
+        final_indecies_filename_base = f"{model_prefix}_{output_dimension}_{output_dtype}_final_indices_query{args.query_count}_k{args.k}"
+        final_distances_filename_base = f"{model_prefix}_{output_dimension}_{output_dtype}_final_distances_query{args.query_count}_k{args.k}"
     else:
-        final_indecies_filename = get_full_filename(data_dir,
-                                                    f"{model_prefix}_{reduced_dimension}_final_indices_query{args.query_count}_k{args.k}_normalized.parquet")
-        final_distances_filename = get_full_filename(data_dir,
-                                                     f"{model_prefix}_{reduced_dimension}_final_distances_query{args.query_count}_k{args.k}_normalized.parquet")
+        final_indecies_filename_base = f"{model_prefix}_{output_dimension}_final_indices_query{args.query_count}_k{args.k}"
+        final_distances_filename_base = f"{model_prefix}_{output_dimension}_final_distances_query{args.query_count}_k{args.k}"
+
+    if not args.norm_embed:
+        final_indecies_filename = get_full_filename(data_dir, f"{final_indecies_filename_base}.parquet")
+        final_distances_filename = get_full_filename(data_dir, f"{final_distances_filename_base}.parquet")
+    else:
+        final_indecies_filename = get_full_filename(data_dir, f"{final_indecies_filename_base}_normalized.parquet")
+        final_distances_filename = get_full_filename(data_dir, f"{final_distances_filename_base}_normalized.parquet")
 
     section_time = time.time()
     if args.use_dataset_api:
         compute_knn_ds(data_dir,
-                       reduced_dimension,
+                       output_dimension,
                        query_filename,
                        args.query_count,
                        base_filename,
@@ -139,7 +152,7 @@ Some example commands:\n
                        args.k)
     else:
         compute_knn(data_dir,
-                    reduced_dimension,
+                    output_dimension,
                     query_filename,
                     args.query_count,
                     base_filename,
@@ -147,7 +160,8 @@ Some example commands:\n
                     final_indecies_filename,
                     final_distances_filename,
                     args.enable_memory_tuning,
-                    args.k)
+                    args.k,
+                    ignore_dimension_check=(model_prefix == 'voyage-3-large'))
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -156,11 +170,11 @@ Some example commands:\n
     section_time = time.time()
     merge_indices_and_distances(data_dir,
                                 model_prefix,
-                                reduced_dimension,
+                                output_dimension,
                                 final_indecies_filename,
                                 final_distances_filename,
                                 args.k,
-                                args.norm_embed)
+                                output_dtype)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -170,7 +184,7 @@ Some example commands:\n
     query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
         generate_ivec_fvec_files(data_dir,
                                  args.model_name,
-                                 reduced_dimension,
+                                 output_dimension,
                                  base_filename,
                                  query_filename,
                                  final_indecies_filename,
@@ -178,7 +192,9 @@ Some example commands:\n
                                  args.base_count,
                                  args.query_count,
                                  args.k,
-                                 args.norm_embed)
+                                 args.norm_embed,
+                                 column_names=None,
+                                 output_dtype=output_dtype)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -188,7 +204,7 @@ Some example commands:\n
         section_time = time.time()
         generate_hdf5_file(data_dir,
                            model_prefix,
-                           reduced_dimension,
+                           output_dimension,
                            base_df_hdf5,
                            query_df_hdf5,
                            final_indecies_filename,
@@ -196,7 +212,8 @@ Some example commands:\n
                            args.base_count,
                            args.query_count,
                            args.k,
-                           args.norm_embed)
+                           args.norm_embed,
+                           output_dtype)
         rprint(Markdown(
             f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
         rprint(Markdown("---"), '')
@@ -216,3 +233,6 @@ Some example commands:\n
                 f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
             rprint(Markdown("---"), '')
 
+
+if __name__ == "__main__":
+    main()

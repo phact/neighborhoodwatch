@@ -23,6 +23,7 @@ from vertexai.preview.language_models import TextEmbeddingModel
 from neighborhoodwatch.nw_utils import *
 
 import cohere
+import voyageai
 
 nlp = spacy.blank(f"{BASE_DATASET_LANG}")
 nlp.add_pipe("sentencizer")
@@ -75,14 +76,14 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
 
     def __init__(self,
                  model_name='text-embedding-ada-002',
-                 reduced_dimension_size=1536,
+                 output_dimension_size=1536,
                  normalize_embed=False):
         assert (model_name == "text-embedding-ada-002" or
                 model_name == "text-embedding-3-small" or
                 model_name == "text-embedding-3-large")
-        super().__init__(model_name, reduced_dimension_size, 256, normalize_embed)
+        super().__init__(model_name, output_dimension_size, 256, normalize_embed)
 
-        assert (reduced_dimension_size <= self.default_model_dimension_size())
+        assert (output_dimension_size <= self.default_model_dimension_size())
         self.client = OpenAI()
 
     def default_model_dimension_size(self):
@@ -213,109 +214,49 @@ class CohereEmbeddingV3Generator(EmbeddingGenerator):
         return np.array(output.embeddings)
 
 
-class JinaAIEmbeddingV2Generator(EmbeddingGenerator):
+class VoyageAIEmbeddingGenerator(EmbeddingGenerator):
     def __init__(self,
-                 model_name='jinaai/jina-embeddings-v2-base-en',
+                 model_name='voyage-3-large',
+                 input_type='document',
+                 output_dtype='float',
                  normalize_embed=False,
-                 late_chunking=False):
-        assert (model_name == "jinaai/jina-embeddings-v2-small-en" or
-                model_name == "jinaai/jina-embeddings-v2-base-en")
+                 output_dimension_size=1024):
 
-        self.model = AutoModel.from_pretrained(f'{model_name}', trust_remote_code=True)
-        self.tokenizer = self.model.tokenizer
-        # self.model = AutoModel.from_pretrained(f'{model_name}', trust_remote_code=True)
-        # self.tokenizer = AutoTokenizer.from_pretrained(f'{model_name}', trust_remote_code=True)
-        super().__init__(model_name, get_embedding_size(model_name), 256, normalize_embed)
+        # TBD: right now only supports 'voyage-3-large' and 'voyage-3-lite' model in NW
+        #      add support for other VoyageAI models in the future when needed
+        assert (model_name == "voyage-3-large" or model_name == "voyage-3-lite")
 
+        assert input_type in ['query', 'document']
 
-        ##
-        #  NOTE: 'late chunking' is currently only for Jinai's embedding models
-        #           see: https://github.com/jina-ai/late-chunking
-        #
-        #        but in theory, it should be applicable to other embedding models
-        #
-        #        for now, the "smaller" chunk size used in 'late chunking' is fixed
-        #        at 32. maybe we can make this configurable in the future.
-        #
-        self.late_chunking = late_chunking
-        self.late_chunking_size = 32
-        assert self.late_chunking_size <= self.chunk_size
+        # https://docs.voyageai.com/docs/embeddings
+        if model_name == "voyage-3-large":
+            assert output_dimension_size is None or output_dimension_size in [256, 512, 1024, 2048]
+            assert output_dtype in ['float', 'int8', 'uint8', 'binary', 'ubinary']
+        elif model_name == "voyage-3-lite":
+            assert output_dtype in ['float']
 
-    ##
-    #  NOTE: Late chunking doesn't really work with the way NW is designed. Comment
-    #        these codes!
-    #
-    # def _chunk_by_tokens(self, input_text: str):
-    #     assert isinstance(input_text, str)
-    #
-    #     inputs = self.tokenizer(input_text, return_tensors='pt', return_offsets_mapping=True)
-    #     token_offsets = inputs['offset_mapping'][0]
-    #
-    #     chunks = []
-    #     span_annotations = []
-    #
-    #     for i in range(0, len(token_offsets), self.late_chunking_size):
-    #         chunk_end = min(i + self.late_chunking_size, len(token_offsets))
-    #         if chunk_end - i > 0:
-    #             start_offset = token_offsets[i][0]
-    #             end_offset = token_offsets[chunk_end - 1][1]
-    #             chunks.append(input_text[start_offset:end_offset])
-    #             span_annotations.append((i, chunk_end))
-    #
-    #     return chunks, span_annotations
-    #
-    # @staticmethod
-    # def _chunked_pooling(
-    #         model_output: 'BatchEncoding', span_annotation: list, max_length=None
-    # ):
-    #     token_embeddings = model_output[0]
-    #     outputs = []
-    #     for embeddings, annotations in zip(token_embeddings, span_annotation):
-    #         if (
-    #                 max_length is not None
-    #         ):  # remove annotations which go bejond the max-length of the model
-    #             annotations = [
-    #                 (start, min(end, max_length - 1))
-    #                 for (start, end) in annotations
-    #                 if start < (max_length - 1)
-    #             ]
-    #             pooled_embeddings = [
-    #                 embeddings[start:end].sum(dim=0) / (end - start)
-    #                 for start, end in annotations
-    #                 if (end - start) >= 1
-    #             ]
-    #             pooled_embeddings = [
-    #                 embedding.detach().cpu().numpy() for embedding in pooled_embeddings
-    #             ]
-    #             outputs.append(pooled_embeddings)
-    #
-    #     return outputs
+        super().__init__(model_name, get_embedding_size(model_name, output_dimension_size), 128, normalize_embed)
+
+        assert input_type is None or input_type in ['query', 'document']
+        self.input_type = input_type
+        self.output_dtype = output_dtype
+
+        self.vo_client = voyageai.Client()
 
     def get_embedding_from_model(self, text, *args, **kwargs):
         # Ensure the text is a list of sentences
         if isinstance(text, str):
             text = [text]
 
-        return self.model.encode(text)
+        results = self.vo_client.embed(text,
+                                       model=self.model_name,
+                                       input_type=self.input_type,
+                                       output_dimension=self.dimensions,
+                                       output_dtype=self.output_dtype)
 
-        ## Late chunking is really not working with NW
-        #
-        # if not self.late_chunking:
-        #     return self.model.encode(text)
-        # else:
-        #     # instead of doing multiple embeddings on multiple smaller text,
-        #     # do embedding only once for a much larger text and then do late chunking
-        #     large_text = ''.join(text)
-        #     text = [large_text]
-        #
-        #     result_embeddings = []
-        #     chunks, span_annotations = self._chunk_by_tokens(large_text)
-        #     inputs = self.tokenizer(text, return_tensors='pt')
-        #     model_output = self.model(**inputs)
-        #     chunked_embeddings = self._chunked_pooling(model_output, [span_annotations])
-        #     result_embeddings.append(chunked_embeddings)
-        #
-        #     return np.array(result_embeddings)
+        embeddings = [data for data in results.embeddings]
+
+        return embeddings
 
 
 def split_into_sentences(text):
@@ -327,7 +268,7 @@ def split_into_sentences(text):
     return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
 
 
-def get_batch_embeddings_from_generator(text_list, generator, dataset_type = None):
+def get_batch_embeddings_from_generator(text_list, generator, dataset_type=None):
     assert dataset_type in ["query", "document", None]
 
     embeddings = []
@@ -376,10 +317,11 @@ def get_batch_embeddings_from_generator(text_list, generator, dataset_type = Non
     return embeddings, zero_vec_cnt
 
 
-def get_embeddings_from_map(text_map, generator, dataset_type = None):
+def get_embeddings_from_map(text_map, generator, dataset_type=None):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
 
-    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator,
+    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences,
+                                                                              generator,
                                                                               dataset_type)
     if zero_embedding_cnt > 0:
         print(f"   [warn] failed to get total {zero_embedding_cnt} embeddings!")
@@ -394,8 +336,10 @@ def process_dataset(dataset_type,
                     row_count,
                     embedding_column,
                     model_name,
-                    reduced_dimension,
-                    normalize=False):
+                    output_dimension,
+                    normalize=False,
+                    # right now only used for VoyageAI model
+                    output_dtype=None):
     meta_array = []
     embedding_array = []
 
@@ -421,7 +365,7 @@ def process_dataset(dataset_type,
     # OpenAI, newer model (3-small, 3-large)
     elif model_name == "text-embedding-3-small" or model_name == "text-embedding-3-large":
         generator = OpenAIEmbeddingGenerator(model_name=model_name,
-                                             reduced_dimension_size=reduced_dimension,
+                                             output_dimension_size=output_dimension,
                                              normalize_embed=normalize)
     # Nvidia Nemo (local embedding server)
     elif model_name == "nvidia-nemo":
@@ -430,9 +374,17 @@ def process_dataset(dataset_type,
     elif model_name == "cohere/embed-english-v3.0" or model_name == "cohere/embed-english-light-3.0":
         generator = CohereEmbeddingV3Generator(model_name=model_name,
                                                normalize_embed=normalize)
-    # JinaAI v2 models
-    elif model_name == "jinaai/jina-embeddings-v2-small-en" or model_name == "jinaai/jina-embeddings-v2-base-en":
-        generator = JinaAIEmbeddingV2Generator(model_name=model_name,
+    # VoyageAI
+    elif model_name == "voyage-3-large":
+        generator = VoyageAIEmbeddingGenerator(model_name=model_name,
+                                               input_type=dataset_type,
+                                               output_dtype=output_dtype,
+                                               normalize_embed=normalize,
+                                               output_dimension_size=output_dimension)
+    elif model_name == "voyage-3-lite":
+        generator = VoyageAIEmbeddingGenerator(model_name=model_name,
+                                               input_type=dataset_type,
+                                               output_dtype=output_dtype,
                                                normalize_embed=normalize)
     # Default to Huggingface mode e5-small-v2
     else:
@@ -577,11 +529,18 @@ def generate_query_dataset(data_dir,
                            model_name,
                            row_count,
                            output_dimension,
-                           normalize_embed=False):
-    if not normalize_embed:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_query_vector_data_{row_count}.parquet'
+                           normalize_embed=False,
+                           output_dtype=None):
+
+    if output_dtype is not None:
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_query_vector_data_{row_count}"
     else:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_query_vector_data_{row_count}_normalized.parquet'
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_query_vector_data_{row_count}"
+
+    if not normalize_embed:
+        filename = f'{data_dir}/{filename_base}.parquet'
+    else:
+        filename = f'{data_dir}/{filename_base}_normalized.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -597,7 +556,8 @@ def generate_query_dataset(data_dir,
                                                       "question",
                                                       model_name,
                                                       output_dimension,
-                                                      normalize_embed)
+                                                      normalize_embed,
+                                                      output_dtype)
     assert processed_count <= row_count, f"Expected {row_count} rows, got {processed_count} rows."
     print(
         f"   totally processed {processed_count} non-zero embeddings and skipped {detected_count} zero embeddings")
@@ -612,14 +572,20 @@ def generate_base_dataset(data_dir,
                           query_vector_filename,
                           row_count,
                           output_dimension,
-                          normalize_embed=False):
+                          normalize_embed=False,
+                          output_dtype=None):
     processed_count = 0
     detected_zero_count = 0
 
-    if not normalize_embed:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_base_vector_data_{row_count}.parquet'
+    if output_dtype is not None:
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_base_vector_data_{row_count}"
     else:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_base_vector_data_{row_count}_normalized.parquet'
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_base_vector_data_{row_count}"
+
+    if not normalize_embed:
+        filename = f'{data_dir}/{filename_base}.parquet'
+    else:
+        filename = f'{data_dir}/{filename_base}_normalized.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -658,7 +624,8 @@ def generate_base_dataset(data_dir,
                                                                "text",
                                                                model_name,
                                                                output_dimension,
-                                                               normalize_embed)
+                                                               normalize_embed,
+                                                               output_dtype)
         print(
             f"   so far processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
@@ -682,7 +649,8 @@ def generate_base_dataset(data_dir,
                                  "text",
                                  model_name,
                                  output_dimension,
-                                 normalize_embed)
+                                 normalize_embed,
+                                 output_dtype)
         processed_count += p2
         detected_zero_count += d2
         print(

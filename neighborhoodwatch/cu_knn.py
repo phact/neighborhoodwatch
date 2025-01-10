@@ -130,11 +130,14 @@ def get_embedding_count(table):
     return len(matching_columns)
 
 
-def prep_table(data_dir, filename, count, input_dimension):
+def prep_table(data_dir, filename, count, input_dimension, ignore_dimension_check=False):
     table = load_table(data_dir, filename, 0, count)
     total_dimensions = sum('embedding_' in c for c in table.column_names)
-    assert total_dimensions >= input_dimension and total_dimensions % input_dimension == 0, \
-        f"Input dimension {input_dimension} does not match the actual dimension {total_dimensions} in the table."
+
+    ## NOTE: For Voyage model with binary output type, the returned embedding length is 1/8 of the specified input_dimension
+    if not ignore_dimension_check:
+        assert (total_dimensions >= input_dimension and total_dimensions % input_dimension == 0), \
+            f"Input dimension {input_dimension} does not match the actual dimension {total_dimensions} in the table."
 
     # Not sure if we really need to keep these 2 columns here
     # in the "process_batches" function, we only select the float columns as per the following code:
@@ -158,6 +161,7 @@ def compute_knn(data_dir,
                 final_distances_filename,
                 mem_tune=False,
                 k=100,
+                ignore_dimension_check=False,
                 initial_batch_size=100000,
                 max_memory_threshold=0.1,
                 split=True):
@@ -167,9 +171,9 @@ def compute_knn(data_dir,
     # batch_size = 543680
 
     print(f"-- prepare query source table for brute-force KNN computation.")
-    query_table = prep_table(data_dir, query_filename, query_count, input_dimensions)
+    query_table = prep_table(data_dir, query_filename, query_count, input_dimensions, ignore_dimension_check)
     print(f"-- prepare base source table for brute-force KNN computation.")
-    base_table = prep_table(data_dir, base_filename, base_count, input_dimensions)
+    base_table = prep_table(data_dir, base_filename, base_count, input_dimensions, ignore_dimension_check)
 
     if mem_tune:
         batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)
@@ -208,11 +212,12 @@ def process_batches(final_indecies_filename,
                     split,
                     engine='raft'
                     ):
-    try:
-        os.remove(final_indecies_filename.replace(".parquet", f"*.parquet"))
-        os.remove(final_distances_filename.replace(".parquet", f"*.parquet"))
-    except OSError:
-        pass
+    # try:
+    #     os.remove(final_indecies_filename.replace(".parquet", f"*.parquet"))
+    #     os.remove(final_distances_filename.replace(".parquet", f"*.parquet"))
+    # except OSError:
+    #     pass
+
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
@@ -283,8 +288,6 @@ def process_batches(final_indecies_filename,
             #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
             #cp.cuda.Stream.null.synchronize()  # Synchronize after search
 
-
-
             distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
             # add batch_offset to indices
             indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
@@ -302,6 +305,7 @@ def process_batches(final_indecies_filename,
         stream_cudf_to_parquet(indices, 100000, final_indecies_filename.replace(".parquet", f"_{start}.parquet"))
 
         cleanup(df_numeric, distances, indices, dataset)
+
     print("completed processing batches")
     print("final distances shape: ", distances.shape)
     print("final indices shape: ", indices.shape)
