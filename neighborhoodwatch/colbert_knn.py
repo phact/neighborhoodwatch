@@ -419,8 +419,7 @@ Some example commands:\n
                                 input_dimensions,
                                 final_indecies_filename,
                                 final_distances_filename,
-                                args.k,
-                                args.norm_embed)
+                                args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
@@ -460,6 +459,7 @@ Some example commands:\n
                            args.norm_embed)
         rprint(Markdown(
             f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
+
 
 if __name__ == "__main__": 
     main()

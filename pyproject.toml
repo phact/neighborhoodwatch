@@ -7,7 +7,7 @@ readme = "README.md"
 packages = [{include = "neighborhoodwatch"}]
 
 [tool.poetry.dependencies]
-python = ">=3.10,<3.13"
+python = ">=3.11,<3.13"
 rmm-cu12 = {url = "https://pypi.nvidia.com/rmm-cu12/rmm_cu12-24.8.2-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl"}
 pylibraft-cu12 = {url = "https://pypi.nvidia.com/pylibraft-cu12/pylibraft_cu12-24.8.1-cp311-cp311-manylinux_2_28_x86_64.whl"}
 ucx-py-cu12 = {url = "https://pypi.nvidia.com/ucx-py-cu12/ucx_py_cu12-0.39.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux_2_28_x86_64.whl"}
@@ -38,13 +38,14 @@ openai = "^1.10.0"
 google-cloud-aiplatform = "^1.35.0"
 h5py = "^3.10.0"
 #sklearn = "0.0.post7"
-sentence-transformers = "2.2.2"
+sentence-transformers = ">=2.2.2"
 #protobuf = "4.24.1"
 protobuf = "4.24.3"
 colbert-ai = "^0.2.18 "
 cohere= "^5.1.6"
-
+voyageai = "^0.3.2"
 torch = "^2.4.1"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
 

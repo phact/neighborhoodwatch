@@ -30,6 +30,7 @@ def read_parquet_to_dataframe(data_dir, filename):
     table = pq.read_table(full_filename)
     return table.to_pandas()
 
+
 def count_vectors(data_dir, filename):
     full_filename = get_full_filename(data_dir, filename)
     with open(full_filename, 'rb') as f:
@@ -65,14 +66,15 @@ def get_nth_vector(data_dir, filename, n):
     return vector
 
 
-def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_columns):
+def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_columns, ignore_dimension_check=False):
     full_filename = get_full_filename(data_dir, filename)
     with open(full_filename, 'wb') as f:
         for index, row in tqdm(df.iterrows()):
             # potentially remove rownum field
             if len(row.values) == num_columns + 1:
                 row = row[:-1]
-            assert len(row.values) == num_columns, f"Expected {num_columns} values, got {len(row.values)}"
+            if not ignore_dimension_check:
+                assert len(row.values) == num_columns, f"Expected {num_columns} values, got {len(row.values)} [filename: {filename}]"
             vec = row.values.astype(np.int32)
             if type_char == 'f':
                 vec = row.values.astype(np.float32)
@@ -106,16 +108,30 @@ def generate_query_vectors_fvec(data_dir,
                                 model_prefix,
                                 dimensions,
                                 normalize_embed,
-                                column_names=None):
+                                column_names=None,
+                                output_dtype=None):
     df = read_and_extract(data_dir, input_parquet, query_count, dimensions, column_names)
-    if not normalize_embed:
-        output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_query_vectors_{query_count}.fvec'
+
+    if output_dtype is not None:
+        output_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_query_vectors_{query_count}'
     else:
-        output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_query_vectors_{query_count}_normalized.fvec'
+        output_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_query_vectors_{query_count}'
+
+    if not normalize_embed:
+        output_fvec = f'{output_fvec_base}.fvec'
+    else:
+        output_fvec = f'{output_fvec_base}_normalized.fvec'
+
     if not os.path.exists(output_fvec):
-        write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
+        write_ivec_fvec_from_dataframe(data_dir,
+                                       output_fvec,
+                                       df,
+                                       'f',
+                                       dimensions,
+                                       model_prefix == 'voyage-3-large')
     else:
         print(f"File {output_fvec} already exists")
+
     return output_fvec, df
 
 
@@ -126,16 +142,30 @@ def generate_base_vectors_fvec(data_dir,
                                model_prefix,
                                dimensions,
                                normalize_embed,
-                               column_names=None):
+                               column_names=None,
+                               output_dtype=None,):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions, column_names)
-    if not normalize_embed:
-        output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_base_vectors_{base_count}.fvec'
+
+    if output_dtype is not None:
+        output_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_base_vectors_{base_count}'
     else:
-        output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_base_vectors_{base_count}_normalized.fvec'
+        output_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_base_vectors_{base_count}'
+
+    if not normalize_embed:
+        output_fvec = f'{output_fvec_base}.fvec'
+    else:
+        output_fvec = f'{output_fvec_base}_normalized.fvec'
+
     if not os.path.exists(output_fvec):
-        write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', dimensions)
+        write_ivec_fvec_from_dataframe(data_dir,
+                                       output_fvec,
+                                       df,
+                                       'f',
+                                       dimensions,
+                                       model_prefix == 'voyage-3-large')
     else:
         print(f"File {output_fvec} already exists")
+
     return output_fvec, df
 
 
@@ -146,16 +176,30 @@ def generate_distances_fvec(data_dir,
                             k,
                             model_prefix,
                             dimensions,
-                            normalize_embed):
+                            normalize_embed,
+                            output_dtype=None):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
-    if not normalize_embed:
-        output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_distances_b{base_count}_q{query_count}_k{k}.fvec'
+
+    if output_dtype is not None:
+        output_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_distances_b{base_count}_q{query_count}_k{k}'
     else:
-        output_fvec = f'{data_dir}/{model_prefix}_{dimensions}_distances_b{base_count}_q{query_count}_k{k}_normalized.fvec'
+        output_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_distances_b{base_count}_q{query_count}_k{k}'
+
+    if not normalize_embed:
+        output_fvec = f'{output_fvec_base}.fvec'
+    else:
+        output_fvec = f'{output_fvec_base}_normalized.fvec'
+
     if not os.path.exists(output_fvec):
-        write_ivec_fvec_from_dataframe(data_dir, output_fvec, df, 'f', k)
+        write_ivec_fvec_from_dataframe(data_dir,
+                                       output_fvec,
+                                       df,
+                                       'f',
+                                       k,
+                                       model_prefix == 'voyage-3-large')
     else:
         print(f"File {output_fvec} already exists")
+
     return output_fvec
 
 
@@ -167,14 +211,27 @@ def generate_indices_ivec(data_dir,
                           k,
                           model_prefix,
                           dimensions,
-                          normalize_embed):
+                          normalize_embed,
+                          output_dtype=None):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
-    if not normalize_embed:
-        output_ivec = f'{data_dir}/{model_prefix}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}.ivec'
+
+    if output_dtype is not None:
+        output_ivec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_indices_b{base_count}_q{query_count}_k{k}'
     else:
-        output_ivec = f'{data_dir}/{model_prefix}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}_normalized.ivec'
+        output_ivec_base = f'{data_dir}/{model_prefix}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}'
+
+    if not normalize_embed:
+        output_ivec = f'{output_ivec_base}.ivec'
+    else:
+        output_ivec = f'{output_ivec_base}_normalized.ivec'
+
     if not os.path.exists(output_ivec):
-        write_ivec_fvec_from_dataframe(data_dir, output_ivec, df, 'i', k)
+        write_ivec_fvec_from_dataframe(data_dir,
+                                       output_ivec,
+                                       df,
+                                       'i',
+                                       k,
+                                       model_prefix == 'voyage-3-large')
     else:
         print(f"File {output_ivec} already exists")
 
@@ -192,7 +249,8 @@ def generate_ivec_fvec_files(data_dir,
                              query_count,
                              k,
                              normalize_embed,
-                             column_names=None):
+                             column_names=None,
+                             output_dtype=None):
     model_prefix = get_model_prefix(model_name)
 
     rprint(Markdown("Generated files: "), '')
@@ -203,8 +261,12 @@ def generate_ivec_fvec_files(data_dir,
                                                               model_prefix,
                                                               dimensions,
                                                               normalize_embed,
-                                                              column_names)
-    rprint(Markdown(f"*`{query_vector_fvec}`* - query vector count: `{count_vectors(data_dir, query_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, query_vector_fvec))}`"))
+                                                              column_names,
+                                                              output_dtype)
+    rprint(Markdown(f"*`{query_vector_fvec}`* - "
+                    f"query vector count: `{count_vectors(data_dir, query_vector_fvec)}`, "
+                    f"dimensions: `{len(get_first_vector(data_dir, query_vector_fvec))}`,"
+                    f"output_dtype: `{output_dtype}`"))
 
     base_vector_fvec, base_df = generate_base_vectors_fvec(data_dir,
                                                            base_vectors_parquet,
@@ -212,8 +274,12 @@ def generate_ivec_fvec_files(data_dir,
                                                            model_prefix,
                                                            dimensions,
                                                            normalize_embed,
-                                                           column_names)
-    rprint(Markdown(f"*`{base_vector_fvec}`* - base vector count: `{count_vectors(data_dir, base_vector_fvec)}`, dimensions: `{len(get_first_vector(data_dir, base_vector_fvec))}`"))
+                                                           column_names,
+                                                           output_dtype)
+    rprint(Markdown(f"*`{base_vector_fvec}`* - "
+                    f"base vector count: `{count_vectors(data_dir, base_vector_fvec)}`, "
+                    f"dimensions: `{len(get_first_vector(data_dir, base_vector_fvec))}`,"
+                    f"output_dtype: `{output_dtype}`"))
 
     indices_ivec = generate_indices_ivec(data_dir,
                                          final_indices_parquet,
@@ -222,8 +288,11 @@ def generate_ivec_fvec_files(data_dir,
                                          k,
                                          model_prefix,
                                          dimensions,
-                                         normalize_embed)
-    rprint(Markdown(f"*`{indices_ivec}`* - indices count: `{count_vectors(data_dir, indices_ivec)}`, k: `{len(get_first_vector(data_dir, indices_ivec))}`"))
+                                         normalize_embed,
+                                         output_dtype)
+    rprint(Markdown(f"*`{indices_ivec}`* - "
+                    f"indices count: `{count_vectors(data_dir, indices_ivec)}`, "
+                    f"k: `{len(get_first_vector(data_dir, indices_ivec))}`"))
     
     distances_fvec = generate_distances_fvec(data_dir,
                                              final_distances_parquet,
@@ -232,8 +301,11 @@ def generate_ivec_fvec_files(data_dir,
                                              k,
                                              model_prefix,
                                              dimensions,
-                                             normalize_embed)
-    rprint(Markdown(f"*`{distances_fvec}`* - distances count: `{count_vectors(data_dir, distances_fvec)}`, k: `{len(get_first_vector(data_dir, distances_fvec))}`"))
+                                             normalize_embed,
+                                             output_dtype)
+    rprint(Markdown(f"*`{distances_fvec}`* - "
+                    f"distances count: `{count_vectors(data_dir, distances_fvec)}`, "
+                    f"k: `{len(get_first_vector(data_dir, distances_fvec))}`"))
     
     return query_vector_fvec, query_df, base_vector_fvec, base_df, indices_ivec, distances_fvec
 
@@ -248,25 +320,29 @@ def generate_hdf5_file(data_dir,
                        base_count, 
                        query_count, 
                        k,
-                       normalize_embed):
-    if not normalize_embed:
-        filename = get_full_filename(data_dir,
-                                     f"{model_prefix}_{dimensions}_base_{base_count}_query_{query_count}_k{k}.hdf5")
+                       normalize_embed,
+                       output_dtype=None):
+    if output_dtype is not None:
+        hdf5_filename_base = f'{model_prefix}_{dimensions}_{output_dtype}_base_{base_count}_query_{query_count}_k{k}'
     else:
-        filename = get_full_filename(data_dir,
-                                     f"{model_prefix}_{dimensions}_base_{base_count}_query_{query_count}_k{k}_normalized.hdf5")
+        hdf5_filename_base = f'{model_prefix}_{dimensions}_base_{base_count}_query_{query_count}_k{k}'
 
-    rprint(Markdown(f"Generated file: {filename}"), '')
+    if not normalize_embed:
+        hdf5_filename = get_full_filename(data_dir, f'{hdf5_filename_base}.hdf5')
+    else:
+        hdf5_filename = get_full_filename(data_dir, f'{hdf5_filename_base}_normalized.hdf5')
 
-    write_hdf5(data_dir, base_df_hdf5, filename, 'train')
+    rprint(Markdown(f"Generated file: {hdf5_filename}"), '')
 
-    write_hdf5(data_dir, query_df_hdf5, filename, 'test')
+    write_hdf5(data_dir, base_df_hdf5, hdf5_filename, 'train')
+
+    write_hdf5(data_dir, query_df_hdf5, hdf5_filename, 'test')
 
     df = read_parquet_to_dataframe(data_dir, final_distances_parquet)
-    write_hdf5(data_dir, df, filename, 'distances')
+    write_hdf5(data_dir, df, hdf5_filename, 'distances')
 
     df = read_parquet_to_dataframe(data_dir, final_indices_parquet)
-    write_hdf5(data_dir, df, filename, 'neighbors')
+    write_hdf5(data_dir, df, hdf5_filename, 'neighbors')
 
 
 def write_hdf5(data_dir, df, filename, datasetname):

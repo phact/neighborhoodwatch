@@ -1,3 +1,5 @@
+from collections import OrderedDict
+
 from datasets import get_dataset_config_names
 import numpy as np
 
@@ -40,12 +42,16 @@ valid_names = ['text-embedding-ada-002',
                'colbertv2.0',
                'nividia-nemo',
                'cohere/embed-english-v3.0',
-               'cohere/embed-english-light-3.0']
+               'cohere/embed-english-light-3.0',
+               'jinaai/jina-embeddings-v2-small-en',
+               'jinaai/jina-embeddings-v2-base-en',
+               'voyage-3-large',
+               'voyage-3-lite']
 
 
 # Programmatically get the embedding size from the model name
 # No need for manual input of the dimensions
-def get_embedding_size(model_name: str, reduced_dimension_size=None):
+def get_embedding_size(model_name: str, output_dimension_size=None):
     # OpenAI embedding models
     if model_name == 'text-embedding-ada-002' or model_name == 'text-embedding-3-small':
         default_model_dimension = 1536
@@ -61,24 +67,30 @@ def get_embedding_size(model_name: str, reduced_dimension_size=None):
         default_model_dimension = 768
     elif model_name == 'intfloat/e5-small-v2':
         default_model_dimension = 384
+    # Colbert models
     elif model_name == 'colbertv2.0':
         default_model_dimension = 128
+    # Cohere models
     elif model_name == 'cohere/embed-english-v3.0':
         default_model_dimension = 1024
     elif model_name == 'cohere/embed-english-light-3.0':
         default_model_dimension = 384
+    elif model_name == 'voyage-3-large':
+        default_model_dimension = 1024
+    elif model_name == 'voyage-3-lite':
+        default_model_dimension = 512
     else:
         raise ValueError(f"Unsupported model_name: {model_name}")
 
-    # Reduced output dimension only applies to OpenAI latest text embedding models
-    if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':
-        if reduced_dimension_size is not None:
-            assert (reduced_dimension_size <= default_model_dimension)
-            return min(default_model_dimension, reduced_dimension_size)
-        else:
-            return default_model_dimension
-    else:
-        return default_model_dimension
+    if output_dimension_size is not None:
+        if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':
+            assert (output_dimension_size <= default_model_dimension)
+            return output_dimension_size
+        elif model_name == 'voyage-3-large':
+            assert (output_dimension_size in [256, 512, 1024, 2048])
+            return output_dimension_size
+
+    return default_model_dimension
 
 
 def get_full_filename(data_dir, filename):
@@ -96,12 +108,15 @@ def get_model_prefix(model_name):
     return model_prefix
 
 
-def remove_duplicate_embeddings(embedding_array):
-    cnt1 = len(embedding_array)
-    embedding_array = list(set(map(tuple, embedding_array)))
-    cnt2 = len(embedding_array)
+def remove_duplicate_embeddings(source_array):
+    cnt1 = len(source_array)
+    ## don't maintain the original order
+    # unique_array = list(set(map(tuple, source_array)))
+    ## maintain the original order
+    unique_array = list(OrderedDict.fromkeys(map(tuple, source_array)))
+    cnt2 = len(unique_array)
 
-    return embedding_array, cnt1 - cnt2,
+    return unique_array, cnt1 - cnt2,
 
 
 def is_zero_embedding(embedding):

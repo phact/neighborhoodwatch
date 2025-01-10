@@ -28,10 +28,10 @@ def test_get_embeddings_from_map():
     elif test_settings.model_name == "text-embedding-ada-002":
         generator = OpenAIEmbeddingGenerator(model_name=test_settings.model_name)
     elif test_settings.model_name == "text-embedding-3-small" or test_settings.model_name == "text-embedding-3-large":
-        generator = OpenAIEmbeddingGenerator(model_name=test_settings.model_name, reduced_dimension_size=test_settings.dimensions)
+        generator = OpenAIEmbeddingGenerator(model_name=test_settings.model_name, output_dimension_size=test_settings.dimensions)
     # OpenAI, newer model (3-small, 3-large)
     elif test_settings.model_name == "text-embedding-3-small" or test_settings.model_name == "text-embedding-3-large":
-        generator = OpenAIEmbeddingGenerator(model_name=test_settings.model_name, reduced_dimension_size=test_settings.dimensions)
+        generator = OpenAIEmbeddingGenerator(model_name=test_settings.model_name, output_dimension_size=test_settings.dimensions)
     # Default to Huggingface mode e5-small-v2
     else:
         generator = IntfloatE5EmbeddingGenerator(model_name=test_settings.model_name)

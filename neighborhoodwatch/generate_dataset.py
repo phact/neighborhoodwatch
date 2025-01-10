@@ -17,11 +17,13 @@ import requests
 from openai import OpenAI
 
 from sentence_transformers import SentenceTransformer
+from transformers import AutoModel, AutoTokenizer
 from vertexai.preview.language_models import TextEmbeddingModel
 
 from neighborhoodwatch.nw_utils import *
 
 import cohere
+import voyageai
 
 nlp = spacy.blank(f"{BASE_DATASET_LANG}")
 nlp.add_pipe("sentencizer")
@@ -35,7 +37,11 @@ datasets.logging.set_verbosity_warning()
 
 
 class EmbeddingGenerator(ABC):
-    def __init__(self, model_name, dimensions, chunk_size, normalize_embed):
+    def __init__(self,
+                 model_name: str,
+                 dimensions: int,
+                 chunk_size: int,
+                 normalize_embed: bool):
         self.model_name = model_name
         self.dimensions = dimensions
         self.chunk_size = chunk_size
@@ -68,13 +74,16 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
     * text-embedding-3-large - default dimension size: 3072 (support reduced output dimension size)
     """
 
-    def __init__(self, model_name='text-embedding-ada-002', reduced_dimension_size=1536, normalize_embed=False):
+    def __init__(self,
+                 model_name='text-embedding-ada-002',
+                 output_dimension_size=1536,
+                 normalize_embed=False):
         assert (model_name == "text-embedding-ada-002" or
                 model_name == "text-embedding-3-small" or
                 model_name == "text-embedding-3-large")
-        super().__init__(model_name, reduced_dimension_size, 256, normalize_embed)
+        super().__init__(model_name, output_dimension_size, 256, normalize_embed)
 
-        assert (reduced_dimension_size <= self.default_model_dimension_size())
+        assert (output_dimension_size <= self.default_model_dimension_size())
         self.client = OpenAI()
 
     def default_model_dimension_size(self):
@@ -101,7 +110,9 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
 
 
 class VertexAIEmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self, model_name='text-embedding-004', normalize_embed=False):
+    def __init__(self,
+                 model_name='text-embedding-004',
+                 normalize_embed=False):
         assert (model_name == "textembedding-gecko" or
                 model_name == "text-multilingual-embedding" or
                 model_name == "text-embedding-004")
@@ -120,12 +131,14 @@ class VertexAIEmbeddingGenerator(EmbeddingGenerator):
 
 
 class IntfloatE5EmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self, model_name='intfloat/e5-small-v2', normalize_embed=False):
+    def __init__(self,
+                 model_name='intfloat/e5-small-v2',
+                 normalize_embed=False):
         assert (model_name == "intfloat/e5-small-v2" or
                 model_name == "intfloat/e5-base-v2" or
                 model_name == "intfloat/e5-large-v2")
 
-        self.model = SentenceTransformer(model_name)
+        self.model = SentenceTransformer(model_name, trust_remote_code=True)
         super().__init__(model_name, self.model.get_sentence_embedding_dimension(), 256, normalize_embed)
 
     def get_embedding_from_model(self, text, *args, **kwargs):
@@ -134,7 +147,7 @@ class IntfloatE5EmbeddingGenerator(EmbeddingGenerator):
             text = [text]
 
         # Generate embeddings
-        embeddings = self.model.encode(text)
+        embeddings = self.model.encode(text, normalize_embeddings=True)
         return embeddings
 
 
@@ -169,7 +182,9 @@ class NvdiaNemoEmbeddingGenerator(EmbeddingGenerator):
 
 
 class CohereEmbeddingV3Generator(EmbeddingGenerator):
-    def __init__(self, model_name='cohere/embed-english-v3.0', normalize_embed=False):
+    def __init__(self,
+                 model_name='cohere/embed-english-v3.0',
+                 normalize_embed=False):
         assert (model_name == "cohere/embed-english-v3.0" or
                 model_name == "cohere/embed-english-light-3.0")
 
@@ -199,6 +214,51 @@ class CohereEmbeddingV3Generator(EmbeddingGenerator):
         return np.array(output.embeddings)
 
 
+class VoyageAIEmbeddingGenerator(EmbeddingGenerator):
+    def __init__(self,
+                 model_name='voyage-3-large',
+                 input_type='document',
+                 output_dtype='float',
+                 normalize_embed=False,
+                 output_dimension_size=1024):
+
+        # TBD: right now only supports 'voyage-3-large' and 'voyage-3-lite' model in NW
+        #      add support for other VoyageAI models in the future when needed
+        assert (model_name == "voyage-3-large" or model_name == "voyage-3-lite")
+
+        assert input_type in ['query', 'document']
+
+        # https://docs.voyageai.com/docs/embeddings
+        if model_name == "voyage-3-large":
+            assert output_dimension_size is None or output_dimension_size in [256, 512, 1024, 2048]
+            assert output_dtype in ['float', 'int8', 'uint8', 'binary', 'ubinary']
+        elif model_name == "voyage-3-lite":
+            assert output_dtype in ['float']
+
+        super().__init__(model_name, get_embedding_size(model_name, output_dimension_size), 128, normalize_embed)
+
+        assert input_type is None or input_type in ['query', 'document']
+        self.input_type = input_type
+        self.output_dtype = output_dtype
+
+        self.vo_client = voyageai.Client()
+
+    def get_embedding_from_model(self, text, *args, **kwargs):
+        # Ensure the text is a list of sentences
+        if isinstance(text, str):
+            text = [text]
+
+        results = self.vo_client.embed(text,
+                                       model=self.model_name,
+                                       input_type=self.input_type,
+                                       output_dimension=self.dimensions,
+                                       output_dtype=self.output_dtype)
+
+        embeddings = [data for data in results.embeddings]
+
+        return embeddings
+
+
 def split_into_sentences(text):
     # if type(text) == pa.lib.StringScalar:
     #     text = text.as_py()
@@ -208,7 +268,7 @@ def split_into_sentences(text):
     return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
 
 
-def get_batch_embeddings_from_generator(text_list, generator, dataset_type = None):
+def get_batch_embeddings_from_generator(text_list, generator, dataset_type=None):
     assert dataset_type in ["query", "document", None]
 
     embeddings = []
@@ -257,10 +317,12 @@ def get_batch_embeddings_from_generator(text_list, generator, dataset_type = Non
     return embeddings, zero_vec_cnt
 
 
-def get_embeddings_from_map(text_map, generator, dataset_type = None):
+def get_embeddings_from_map(text_map, generator, dataset_type=None):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
 
-    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences, generator, dataset_type)
+    embedding_array, zero_embedding_cnt = get_batch_embeddings_from_generator(flattened_sentences,
+                                                                              generator,
+                                                                              dataset_type)
     if zero_embedding_cnt > 0:
         print(f"   [warn] failed to get total {zero_embedding_cnt} embeddings!")
 
@@ -274,8 +336,10 @@ def process_dataset(dataset_type,
                     row_count,
                     embedding_column,
                     model_name,
-                    reduced_dimension,
-                    normalize=False):
+                    output_dimension,
+                    normalize=False,
+                    # right now only used for VoyageAI model
+                    output_dtype=None):
     meta_array = []
     embedding_array = []
 
@@ -291,6 +355,41 @@ def process_dataset(dataset_type,
     sentence_batch_counter = 0
     text_map = []
     active_rows = []
+
+    # Vertex AI
+    if model_name == 'textembedding-gecko' or model_name == 'text-multilingual-embedding' or model_name == 'text-embedding-004':
+        generator = VertexAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+    # OpenAI, older model (ada-002)
+    elif model_name == "text-embedding-ada-002":
+        generator = OpenAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+    # OpenAI, newer model (3-small, 3-large)
+    elif model_name == "text-embedding-3-small" or model_name == "text-embedding-3-large":
+        generator = OpenAIEmbeddingGenerator(model_name=model_name,
+                                             output_dimension_size=output_dimension,
+                                             normalize_embed=normalize)
+    # Nvidia Nemo (local embedding server)
+    elif model_name == "nvidia-nemo":
+        generator = NvdiaNemoEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+    # Cohere English V3.0 model
+    elif model_name == "cohere/embed-english-v3.0" or model_name == "cohere/embed-english-light-3.0":
+        generator = CohereEmbeddingV3Generator(model_name=model_name,
+                                               normalize_embed=normalize)
+    # VoyageAI
+    elif model_name == "voyage-3-large":
+        generator = VoyageAIEmbeddingGenerator(model_name=model_name,
+                                               input_type=dataset_type,
+                                               output_dtype=output_dtype,
+                                               normalize_embed=normalize,
+                                               output_dimension_size=output_dimension)
+    elif model_name == "voyage-3-lite":
+        generator = VoyageAIEmbeddingGenerator(model_name=model_name,
+                                               input_type=dataset_type,
+                                               output_dtype=output_dtype,
+                                               normalize_embed=normalize)
+    # Default to Huggingface mode e5-small-v2
+    else:
+        generator = IntfloatE5EmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
+
     for row in tqdm(dataset):
         last_row = row_counter == len(dataset) - 1
         active_rows.append(row)
@@ -301,29 +400,6 @@ def process_dataset(dataset_type,
         i += 1
         if sentence_batch_counter >= sentence_batch_size or last_row:
             sentence_batch_counter = 0
-
-            # Vertex AI
-            if model_name == 'textembedding-gecko' or model_name == 'text-multilingual-embedding' or model_name == 'text-embedding-004':
-                generator = VertexAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
-            # OpenAI, older model (ada-002)
-            elif model_name == "text-embedding-ada-002":
-                generator = OpenAIEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
-            # OpenAI, newer model (3-small, 3-large)
-            elif model_name == "text-embedding-3-small" or model_name == "text-embedding-3-large":
-                generator = OpenAIEmbeddingGenerator(model_name=model_name,
-                                                     reduced_dimension_size=reduced_dimension,
-                                                     normalize_embed=normalize)
-            # Nvidia Nemo (local embedding server)
-            elif model_name == "nvidia-nemo":
-                generator = NvdiaNemoEmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
-            # Cohere English V3.0 model
-            elif model_name == "cohere/embed-english-v3.0" or model_name == "cohere/embed-english-light-3.0":
-                generator = CohereEmbeddingV3Generator(model_name=model_name,
-                                                       normalize_embed=normalize)
-
-            # Default to Huggingface mode e5-small-v2
-            else:
-                generator = IntfloatE5EmbeddingGenerator(model_name=model_name, normalize_embed=normalize)
 
             embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map(text_map, generator, dataset_type)
             detected_zero_embedding_cnt += zero_embedding_cnt
@@ -431,7 +507,8 @@ class ParquetStreamer:
         self.writer.write_table(table)
 
     def stream_to_parquet_without_src_metadata(self, embedding_array):
-        assert len(self.columns) == len(embedding_array[0]), f"column count mismatch: {len(self.columns)} != {len(embedding_array[0])}"
+        assert len(self.columns) == len(
+            embedding_array[0]), f"column count mismatch: {len(self.columns)} != {len(embedding_array[0])}"
 
         embedding_array = np.array(embedding_array)
         df = pd.DataFrame(embedding_array.astype('float32'), columns=self.columns)
@@ -452,11 +529,18 @@ def generate_query_dataset(data_dir,
                            model_name,
                            row_count,
                            output_dimension,
-                           normalize_embed=False):
-    if not normalize_embed:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_query_vector_data_{row_count}.parquet'
+                           normalize_embed=False,
+                           output_dtype=None):
+
+    if output_dtype is not None:
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_query_vector_data_{row_count}"
     else:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_query_vector_data_{row_count}_normalized.parquet'
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_query_vector_data_{row_count}"
+
+    if not normalize_embed:
+        filename = f'{data_dir}/{filename_base}.parquet'
+    else:
+        filename = f'{data_dir}/{filename_base}_normalized.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -472,7 +556,8 @@ def generate_query_dataset(data_dir,
                                                       "question",
                                                       model_name,
                                                       output_dimension,
-                                                      normalize_embed)
+                                                      normalize_embed,
+                                                      output_dtype)
     assert processed_count <= row_count, f"Expected {row_count} rows, got {processed_count} rows."
     print(
         f"   totally processed {processed_count} non-zero embeddings and skipped {detected_count} zero embeddings")
@@ -487,14 +572,20 @@ def generate_base_dataset(data_dir,
                           query_vector_filename,
                           row_count,
                           output_dimension,
-                          normalize_embed=False):
+                          normalize_embed=False,
+                          output_dtype=None):
     processed_count = 0
     detected_zero_count = 0
 
-    if not normalize_embed:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_base_vector_data_{row_count}.parquet'
+    if output_dtype is not None:
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_base_vector_data_{row_count}"
     else:
-        filename = f'{data_dir}/{model_name.replace("/", "_")}_{output_dimension}_base_vector_data_{row_count}_normalized.parquet'
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_base_vector_data_{row_count}"
+
+    if not normalize_embed:
+        filename = f'{data_dir}/{filename_base}.parquet'
+    else:
+        filename = f'{data_dir}/{filename_base}_normalized.parquet'
 
     if os.path.exists(filename):
         print(f"file {filename} already exists")
@@ -533,8 +624,10 @@ def generate_base_dataset(data_dir,
                                                                "text",
                                                                model_name,
                                                                output_dimension,
-                                                               normalize_embed)
-        print(f"   so far processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
+                                                               normalize_embed,
+                                                               output_dtype)
+        print(
+            f"   so far processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     if row_count > processed_count:
@@ -556,10 +649,12 @@ def generate_base_dataset(data_dir,
                                  "text",
                                  model_name,
                                  output_dimension,
-                                 normalize_embed)
+                                 normalize_embed,
+                                 output_dtype)
         processed_count += p2
         detected_zero_count += d2
-        print(f"   totally processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
+        print(
+            f"   totally processed {processed_count} non-zero embeddings and skipped {detected_zero_count} zero embeddings")
         assert processed_count <= row_count, f"Expected less than or equal to {row_count} rows, got {processed_count} rows."
 
     streamer.close()
