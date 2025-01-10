@@ -212,11 +212,11 @@ def process_batches(final_indecies_filename,
                     split,
                     engine='raft'
                     ):
-    # try:
-    #     os.remove(final_indecies_filename.replace(".parquet", f"*.parquet"))
-    #     os.remove(final_distances_filename.replace(".parquet", f"*.parquet"))
-    # except OSError:
-    #     pass
+    try:
+        os.remove(final_indecies_filename.replace(".parquet", f"*.parquet"))
+        os.remove(final_distances_filename.replace(".parquet", f"*.parquet"))
+    except OSError:
+        pass
 
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
