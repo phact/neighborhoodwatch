@@ -13,7 +13,8 @@ import pyarrow.parquet as pq
 import pyarrow.compute as pc
 import requests
 
-from neighborhoodwatch.model_generator import EmbeddingGenerator, get_embedding_generator_for_model
+from neighborhoodwatch.model_generator import EmbeddingGenerator, get_embedding_generator_for_model, \
+    CohereEmbeddingV3Generator
 from neighborhoodwatch.nw_utils import *
 
 import cohere
@@ -40,8 +41,6 @@ def is_zero_embedding(embedding):
 def split_into_sentences(text):
     # if type(text) == pa.lib.StringScalar:
     #     text = text.as_py()
-    if isinstance(text, dict) and 'text' in text:
-        text = text['text']
     if isinstance(text, dict) and 'text' in text:
         text = text['text']
     doc = nlp(text)
@@ -103,7 +102,7 @@ def get_embeddings_from_map(text_map, generator, dataset_type=None):
     embedding_array = generator.generate_embedding(flattened_sentences, generator)
 
     iterator = iter(embedding_array)
-    return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map], zero_embedding_cnt
+    return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map]
 
 
 def process_dataset(streamer,
@@ -176,12 +175,14 @@ def process_dataset(streamer,
                     meta_array.append(meta_row_array)
                     embedding_array.append(embedding)
                     embedding_counter += 1
-                    if embedding_counter >= row_count:
+                    if ((embedding_counter >= row_count or last_row) and
+                            (len(meta_array) > 0) and (len(embedding_array) > 0)):
                         print(f"Total embeddings so far {embedding_counter} with {skipped_embedding_cnt} skipped out of {row_count}")
                         streamer.stream_to_parquet(meta_array, embedding_array)
                         return embedding_counter, skipped_embedding_cnt
 
-            streamer.stream_to_parquet(meta_array, embedding_array)
+            if (len(meta_array) > 0) and (len(embedding_array) > 0):
+                streamer.stream_to_parquet(meta_array, embedding_array)
             i = 0
             meta_array = []
             embedding_array = []

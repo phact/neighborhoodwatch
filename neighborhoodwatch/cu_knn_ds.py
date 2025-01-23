@@ -172,8 +172,6 @@ def compute_knn_ds(data_dir,
                    query_count,
                    base_filename,
                    base_count,
-                   final_indecies_filename,
-                   final_distances_filename,
                    mem_tune=False,
                    k=100,
                    initial_batch_size=200000,
@@ -202,9 +200,7 @@ def compute_knn_ds(data_dir,
     # batch_count = math.ceil(len(base_dataset) / batch_size)
     assert (base_count % batch_size == 0) or k <= (base_count % batch_size), f"Cannot generate k of {k} with only {base_count} rows and batch_size of {batch_size}."
     
-    process_dataset_batches(final_indecies_filename,
-                            final_distances_filename,
-                            base_dataset, 
+    process_dataset_batches(base_dataset,
                             base_column_names,
                             query_dataset,
                             query_column_names, 
@@ -224,9 +220,7 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_dataset_batches(final_indecies_filename,
-                            final_distances_filename,
-                            base_dataset, 
+def process_dataset_batches(base_dataset,
                             base_column_names,
                             query_dataset, 
                             query_column_names,
@@ -275,9 +269,6 @@ def process_dataset_batches(final_indecies_filename,
 
         assert (len(distances) == query_count)
         assert (len(indices) == query_count)
-
-        distances['RowNum'] = range(0, len(distances))
-        indices['RowNum'] = range(0, len(indices))
 
         stream_cudf_to_parquet(distances, 100000, f'distances{i}.parquet')
         stream_cudf_to_parquet(indices, 100000, f'indices{i}.parquet')

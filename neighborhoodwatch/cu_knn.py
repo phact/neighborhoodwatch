@@ -9,7 +9,6 @@ import math
 import numpy as np
 from pylibraft.neighbors.brute_force import knn
 from cuvs.neighbors import brute_force
-from cuvs.neighbors import brute_force
 import rmm
 from rich import print as rprint
 from rich.markdown import Markdown
@@ -68,16 +67,13 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
     total_gpu_memory = nvidia_smi.nvmlDeviceGetMemoryInfo(handle).total
 
     print("-- total memory:", total_gpu_memory)
-    print("-- total memory:", total_gpu_memory)
 
     nvidia_smi.nvmlShutdown()
 
     # Measure GPU memory usage after converting to cuDF dataframe
     memory_used = df.memory_usage().sum()
     print(f"-- memory_used {memory_used}")
-    print(f"-- memory_used {memory_used}")
     factor = math.ceil((total_gpu_memory * .2) / memory_used)
-    print(f"-- factor {factor}")
     print(f"-- factor {factor}")
     batch_size *= factor  # or any other increment factor you find suitable
 
@@ -100,16 +96,13 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
                 # to the last successful size.
                 batch_size = int(0.8 * batch_size)
                 print(f"-- found threshold {batch_size}")
-                print(f"-- found threshold {batch_size}")
                 break
             else:
-                print(f"-- memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
                 print(f"-- memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
                 batch_size *= 1.2
 
         except Exception as e:
             batch_size = int(0.8 * batch_size)
-            print(f"-- exception {e}, max batch size {batch_size}")
             print(f"-- exception {e}, max batch size {batch_size}")
             break
 
@@ -237,27 +230,15 @@ def process_batches(base_table,
         for i in tqdm(range(splits)):
             offset = i * rows_per_split
             length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
-        if not split:
-            splits = 1
-
-        for i in tqdm(range(splits)):
-            offset = i * rows_per_split
-            length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
             query_batch = query_table.slice(offset, length)
-            query_batch = query_table.slice(offset, length)
 
-            df1 = cudf.DataFrame.from_arrow(query_batch)
-            df_numeric1 = df1.select_dtypes(['float32', 'float64'])
             df1 = cudf.DataFrame.from_arrow(query_batch)
             df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
             cleanup(df1)
             query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
-            cleanup(df1)
-            query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
 
-            assert (k <= len(dataset))
             assert (k <= len(dataset))
 
             print(f"Dataset shape: {dataset.shape}, Query shape: {query.shape}")
@@ -326,17 +307,9 @@ def process_batches(base_table,
             distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
             # add batch_offset to indices
             indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
-            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
-            # add batch_offset to indices
-            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
 
             distances = cudf.concat([distances, distances1], ignore_index=True)
             indices = cudf.concat([indices, indices1], ignore_index=True)
-            distances = cudf.concat([distances, distances1], ignore_index=True)
-            indices = cudf.concat([indices, indices1], ignore_index=True)
-
-        distances.columns = distances.columns.astype(str)
-        indices.columns = indices.columns.astype(str)
 
         distances.columns = distances.columns.astype(str)
         indices.columns = indices.columns.astype(str)
@@ -349,23 +322,6 @@ def process_batches(base_table,
 
         cleanup(df_numeric, distances, indices, dataset)
 
-    # print("completed processing batches")
-    # print("final distances shape: ", distances.shape)
-    # print("final indices shape: ", indices.shape)
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 8:
-        print("Usage: python cu_knn.py model_name query_filename query_count base_filename base_count dimensions mem_tune k")
-        sys.exit(1)
-
-    model_name = sys.argv[1]
-    query_filename = sys.argv[2]
-    query_count = int(sys.argv[3])
-    base_filename = sys.argv[4]
-    base_count = int(sys.argv[5])
-    dimensions = int(sys.argv[6])
-    mem_tune = sys.argv[7] == 'True'
-    k = int(sys.argv[8])
-
-    compute_knn('.', model_name, query_filename, query_count, base_filename, base_count, dimensions, True, k)
+    print("completed processing batches")
+    print("final distances shape: ", distances.shape)
+    print("final indices shape: ", indices.shape)

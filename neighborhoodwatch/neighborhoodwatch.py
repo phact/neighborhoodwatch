@@ -89,7 +89,7 @@ Some example commands:\n
 
     data_dir = f"{args.data_dir}/{model_prefix}/q{args.query_count}_b{args.base_count}_k{args.k}"
     if not os.path.exists(data_dir):
-        os.makedirs(args.data_dir)
+        os.makedirs(data_dir)
 
     output_dimension = get_effective_embedding_size(args.model_name, args.output_dimension_size)
     output_dtype = None
@@ -132,8 +132,6 @@ Some example commands:\n
                        args.query_count,
                        base_filename,
                        args.base_count,
-                       final_indecies_filename,
-                       final_distances_filename,
                        args.enable_memory_tuning,
                        args.k)
     else:
@@ -143,11 +141,8 @@ Some example commands:\n
                     args.query_count,
                     base_filename,
                     args.base_count,
-                    final_indecies_filename,
-                    final_distances_filename,
                     args.enable_memory_tuning,
-                    args.k,
-                    ignore_dimension_check=(model_prefix == 'voyage-3-large'))
+                    args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
