@@ -25,20 +25,24 @@ def generate_test_files(indices_parquet_filename,
 
 
 def test_merge():
-    indices_parquet_filename = 'indices0.parquet'
-    distances_parquet_filename = 'distances0.parquet'
-    
     dummy_model_name = 'test_03'
     indices_count = 1000
+    dimensions = 384
     k = 10
+
+    indices_parquet_filename = f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_indices0.parquet"
+    distances_parquet_filename = f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_distances0.parquet"
 
     if indices_parquet_filename not in os.listdir(test_settings.test_dataset_dir) or \
        distances_parquet_filename not in os.listdir(test_settings.test_dataset_dir):
-        generate_test_files(f"{test_settings.test_dataset_dir}/{dummy_model_name}_{indices_parquet_filename}",
-                            f"{test_settings.test_dataset_dir}/{dummy_model_name}_{distances_parquet_filename}",
+        generate_test_files(indices_parquet_filename,
+                            distances_parquet_filename,
                             indices_count,
                             k)
     
     merge_indices_and_distances(test_settings.test_dataset_dir, 
-                                dummy_model_name, 
+                                dummy_model_name,
+                                dimensions,
+                                test_settings.get_final_indices_filename(dummy_model_name, dimensions),
+                                test_settings.get_final_distances_filename(dummy_model_name, dimensions),
                                 k)

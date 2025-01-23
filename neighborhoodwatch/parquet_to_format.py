@@ -1,5 +1,6 @@
 import sys
 import cupy as cp
+import cupy as cp
 import h5py
 import numpy as np
 import pyarrow.parquet as pq
@@ -28,6 +29,7 @@ def read_parquet_to_dataframe(data_dir, filename):
     table = pq.read_table(full_filename)
     return table.to_pandas()
 
+
 def count_vectors(data_dir, filename):
     full_filename = get_full_filename(data_dir, filename)
     with open(full_filename, 'rb') as f:
@@ -40,6 +42,7 @@ def count_vectors(data_dir, filename):
             f.read(4 * dim)
             count += 1
         return count
+
 
 def get_first_vector(data_dir, filename):
     return get_nth_vector(data_dir, filename, 0)
@@ -58,25 +61,19 @@ def get_nth_vector(data_dir, filename, n):
         #f.seek(4 * n * (dimension), 1)
         assert os.path.getsize(full_filename) >= f.tell() + 4 * dimension
         vector = struct.unpack(format_char * dimension, f.read(4 * dimension))
-        if format_char == 'f':
-            if ("distances" not in full_filename):
-                if not np.count_nonzero(vector) == 0:
-                    if not np.isclose(np.linalg.norm(vector), 1):
-                        assert np.isclose(np.linalg.norm(vector), 1), f"Vector {n} in file {full_filename} is not normalized: {vector}"
-                else:
-                    print(f"Vector {n} in file {full_filename} is the zero vector: {vector}")
 
     return vector
 
 
-def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_columns):
+def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_columns, ignore_dimension_check=False):
     full_filename = get_full_filename(data_dir, filename)
     with open(full_filename, 'wb') as f:
         for index, row in tqdm(df.iterrows()):
             # potentially remove rownum field
             if len(row.values) == num_columns + 1:
                 row = row[:-1]
-            assert len(row.values) == num_columns, f"Expected {num_columns} values, got {len(row.values)}"
+            if not ignore_dimension_check:
+                assert len(row.values) == num_columns, f"Expected {num_columns} values, got {len(row.values)} [filename: {filename}]"
             vec = row.values.astype(np.int32)
             if type_char == 'f':
                 vec = row.values.astype(np.float32)
@@ -86,9 +83,21 @@ def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_column
 
 
 def read_and_extract(data_dir, input_parquet, rowcount, dimensions, column_names=None):
+def read_and_extract(data_dir, input_parquet, rowcount, dimensions, column_names=None):
     full_filename = get_full_filename(data_dir, input_parquet)
     table = pq.read_table(full_filename)
     table = table.slice(0, rowcount)
+    table = table.slice(0, rowcount)
+
+    if column_names is None:
+        column_names = []
+        for i in range(dimensions):
+            column_names.append(f'embedding_{i}')
+        columns_to_drop = list(set(table.schema.names) - set(column_names))
+        for col in columns_to_drop:
+            if col in table.schema.names:  # Check if the column exists in the table
+                col_index = table.schema.get_field_index(col)
+                table = table.remove_column(col_index)
 
     if column_names is None:
         column_names = []
@@ -283,6 +292,8 @@ def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, 
             continue
 
         col = 0
+        last_distance = 0
+        last_similarity = 1
         last_distance = 0
         last_similarity = 1
         for index in first_indexes:

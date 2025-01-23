@@ -47,7 +47,7 @@ Some example commands:\n
     parser.add_argument('-odt', '--output_dtype', type=str, default='float',
                         help="Output dtype; currently only valid for VoyageAI model!")
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
-    parser.add_argument('--data_dir', type=str, default='knn_dataset',
+    parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
     parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=False,
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
@@ -99,21 +99,21 @@ Some example commands:\n
 
     rprint(Markdown("**Generating query dataset ......** "), '')
     section_time = time.time()
-    query_filename = generate_query_dataset(args.data_dir,
-                                            args.query_count,
+    query_filename = generate_query_dataset(data_dir,
                                             args.model_name,
+                                            args.query_count,
                                             output_dimension,
                                             output_dtype)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    rprint(Markdown("**Generating base dataset** "), '')
+    rprint(Markdown("**Generating base dataset ......** "), '')
     section_time = time.time()
-    base_filename = generate_base_dataset(args.data_dir,
+    base_filename = generate_base_dataset(data_dir,
+                                          args.model_name,
                                           query_filename,
                                           args.base_count,
-                                          args.model_name,
                                           output_dimension,
                                           output_dtype)
     rprint(Markdown(
@@ -132,32 +132,34 @@ Some example commands:\n
                        args.query_count,
                        base_filename,
                        args.base_count,
+                       final_indecies_filename,
+                       final_distances_filename,
                        args.enable_memory_tuning,
                        args.k)
     else:
-        compute_knn(args.data_dir,
-                    args.model_name,
+        compute_knn(data_dir,
                     output_dimension,
                     query_filename,
                     args.query_count,
                     base_filename,
                     args.base_count,
+                    final_indecies_filename,
+                    final_distances_filename,
                     args.enable_memory_tuning,
-                    args.k)
+                    args.k,
+                    ignore_dimension_check=(model_prefix == 'voyage-3-large'))
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    rprint(Markdown("**Merging indices and distances** "), '')
+    rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
     merge_indices_and_distances(args.data_dir)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    model_prefix = get_model_prefix(args.model_name)
-
-    rprint(Markdown("**Generating ivec's and fvec's** "), '')
+    rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
     query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = \
         generate_output_files(args.data_dir,
@@ -179,26 +181,17 @@ Some example commands:\n
         yes_no_str = input(
             "Dataset validation is enabled and it may take a very long time to finish. Do you want to continue? (y/n/yes/no): ")
         if yes_no_str == 'y' or yes_no_str == 'yes':
-            rprint(Markdown("**Validating ivec's and fvec's** "), '')
+            rprint(Markdown("**Validating ivec's and fvec's ......** "), '')
             section_time = time.time()
-            validate_files(args.data_dir,
+            validate_files(data_dir,
                            query_vector_fvec,
+                           base_vector_fvec,
                            indices_ivec,
-                           distances_fvec,
-                           base_vector_fvec)
+                           distances_fvec)
             rprint(Markdown(
                 f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
             rprint(Markdown("---"), '')
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 6:
-        rprint(Markdown('Usage: `neighborhoodwatch.main(query_count base_count dimensions k)`'))
-        sys.exit(1)
-
-    query_count = int(sys.argv[2])
-    base_count = int(sys.argv[4])
-    dimensions = int(sys.argv[5])
-    k = int(sys.argv[6])
-
-    main(query_count, base_count, dimensions, k)
+    main()

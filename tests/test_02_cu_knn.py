@@ -3,15 +3,8 @@ import numpy as np
 import pandas as pd
 
 from neighborhoodwatch.cu_knn import compute_knn
+from neighborhoodwatch.nw_utils import normalize_vector
 import tests.conftest as test_settings
-
-
-def normalize_vector(row):
-    vector = row.values
-    norm = np.linalg.norm(vector)
-    if norm == 0:  # prevent division by zero
-        return vector
-    return (vector / norm).astype(np.float32)
 
 
 def generate_test_files(query_vectors_parquet_filename, 
@@ -87,10 +80,12 @@ def test_cu_knn():
     
     compute_knn(test_settings.test_dataset_dir,
                 dummy_model_name,
-                f"{dummy_model_name}_{query_vector_filename}", 
-                query_count, 
-                f"{dummy_model_name}_{base_vector_filename}", 
-                base_count, 
-                dimensions, 
-                False, 
-                k)
+                dimensions,
+                f"{dummy_model_name}_{query_vector_filename}",
+                query_count,
+                f"{dummy_model_name}_{base_vector_filename}",
+                base_count,
+                test_settings.get_final_indices_filename(dummy_model_name, dimensions),
+                test_settings.get_final_distances_filename(dummy_model_name, dimensions),
+                mem_tune=False,
+                k=k)

@@ -3,8 +3,6 @@ from collections import OrderedDict
 import numpy as np
 from datasets import get_dataset_config_names
 
-from neighborhoodwatch.model_generator import get_default_model_dimension_size, EmbeddingModelName
-
 BASE_DATASET = "wikipedia"
 BASE_DATASET_LANG = "en"
 BASE_DATASET_VERSION = "20220301"
@@ -15,7 +13,7 @@ QUERY_DATASET = "squad"
 
 # Check whether the dataset exists remotely
 def check_dataset_exists_remote():
-    configs = get_dataset_config_names(BASE_DATASET)
+    configs = get_dataset_config_names(BASE_DATASET, trust_remote_code=True)
     if BASE_CONFIG in configs:
         return True
     else:
@@ -33,7 +31,7 @@ def get_model_prefix(model_name):
     if model_name:
         model_prefix = model_name.replace("/", "_")
     else:
-        model_prefix = "ada_002"
+        model_prefix = "text-embedding-ada-002"
     return model_prefix
 
 

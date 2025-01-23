@@ -2,6 +2,7 @@ import math
 import os
 import multiprocessing
 import time
+from abc import ABC, abstractmethod
 
 import spacy
 import datasets
@@ -10,9 +11,13 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
+import requests
 
 from neighborhoodwatch.model_generator import EmbeddingGenerator, get_embedding_generator_for_model
 from neighborhoodwatch.nw_utils import *
+
+import cohere
+import voyageai
 
 nlp = spacy.blank(f"{BASE_DATASET_LANG}")
 nlp.add_pipe("sentencizer")
@@ -37,17 +42,68 @@ def split_into_sentences(text):
     #     text = text.as_py()
     if isinstance(text, dict) and 'text' in text:
         text = text['text']
+    if isinstance(text, dict) and 'text' in text:
+        text = text['text']
     doc = nlp(text)
-    return [sent.text.strip() for sent in doc.sents]
+    return [sent.text.strip() for sent in doc.sents if len(sent.text.strip()) > 0]
 
 
-def get_embeddings_from_map(text_map, generator):
+def get_batch_embeddings_from_generator(text_list, generator, dataset_type=None):
+    assert dataset_type in ["query", "document", None]
+
+    embeddings = []
+    chunk_size = generator.chunk_size
+    total_items = len(text_list)
+    chunks = math.ceil(total_items / chunk_size)
+
+    zero_vec_cnt = 0
+
+    for i in tqdm(range(chunks)):
+        start = i * chunk_size
+        end = min(start + chunk_size, total_items)
+        process = text_list[start:end]
+        zero_vector = [0.0] * generator.dimensions
+
+        try:
+            if "e5" in generator.model_name:
+                process = ["query:" + s for s in process]
+
+            if isinstance(generator, CohereEmbeddingV3Generator):
+                if dataset_type == "query":
+                    response = generator.generate_embedding(process, input_type="search_query")
+                elif dataset_type == "document":
+                    response = generator.generate_embedding(process, input_type="search_document")
+                else:
+                    response = generator.generate_embedding(process)
+            else:
+                response = generator.generate_embedding(process)
+
+            for item in response:
+                # if len(item) != generator.model.get_sentence_embedding_dimension():
+                #    print("got a bad embedding from SentenceTransformer, skipping it:")
+                #    print(item)
+                #    print(f"for input {process}")
+                # else:
+                #    embeddings.append(item)
+                embeddings.append(item)
+        except Exception as e:
+            print(f"   failed to get embeddings for text chunk (length: {len(process)}) with error: {e}")
+            zero_vec_cnt = zero_vec_cnt + 1
+            # zero embeddings will be skipped in the output parquet file
+            for _ in process:
+                embeddings.append(zero_vector)
+            continue
+
+    return embeddings, zero_vec_cnt
+
+
+def get_embeddings_from_map(text_map, generator, dataset_type=None):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
 
     embedding_array = generator.generate_embedding(flattened_sentences, generator)
 
     iterator = iter(embedding_array)
-    return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map]
+    return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map], zero_embedding_cnt
 
 
 def process_dataset(streamer,
@@ -112,18 +168,13 @@ def process_dataset(streamer,
                             meta_row_array.append(title_column_value.replace("_", " "))
                         elif column == embedding_column:
                             assert text_map[index][0] == index, f"index mismatch {text_map[0][0]} != {index}"
-
                             value = text_map[index][1][idx]
                             meta_row_array.append(value)
                         else:
                             meta_row_array.append(active_rows[index][column])
 
                     meta_array.append(meta_row_array)
-
-                    embedding_array.append(
-                        embedding
-                    )
-
+                    embedding_array.append(embedding)
                     embedding_counter += 1
                     if embedding_counter >= row_count:
                         print(f"Total embeddings so far {embedding_counter} with {skipped_embedding_cnt} skipped out of {row_count}")
@@ -179,9 +230,7 @@ class ParquetStreamer:
     def stream_to_parquet(self, meta_array, embedding_array):
         meta_array = np.array(meta_array)
         embedding_array = np.array(embedding_array)
-
         meta_columns = self.columns.copy()
-
         for i in range(embedding_array.shape[1]):
             meta_columns.append(f"embedding_{i}")
 
@@ -190,6 +239,19 @@ class ParquetStreamer:
             columns_list.append(pd.DataFrame(column.astype('float32'), columns=[f'embedding_{i}']))
 
         df = pd.concat(columns_list, axis=1)
+        table = pa.Table.from_pandas(df)
+
+        if self.writer is None:
+            self.writer = pq.ParquetWriter(self.filename, table.schema)
+
+        self.writer.write_table(table)
+
+    def stream_to_parquet_without_src_metadata(self, embedding_array):
+        assert len(self.columns) == len(
+            embedding_array[0]), f"column count mismatch: {len(self.columns)} != {len(embedding_array[0])}"
+
+        embedding_array = np.array(embedding_array)
+        df = pd.DataFrame(embedding_array.astype('float32'), columns=self.columns)
         table = pa.Table.from_pandas(df)
 
         if self.writer is None:
@@ -214,7 +276,7 @@ def generate_query_dataset(data_dir, row_count, model_name, output_dimension=Non
         print(f"file {filename} already exists")
         return filename
 
-    full_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache")["train"]
+    full_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
     processed_count, skipped_count = process_dataset(streamer,
                                                      'query',
@@ -239,7 +301,7 @@ def generate_base_dataset(data_dir,
                           output_dimension=None,
                           output_dtype=None):
     processed_count = 0
-    skipped_count = 0
+    detected_zero_count = 0
 
     if output_dtype is not None:
         filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_base_vector_data_{row_count}"
@@ -258,7 +320,7 @@ def generate_base_dataset(data_dir,
     full_dataset = datasets.load_dataset(BASE_DATASET,
                                          BASE_CONFIG,
                                          cache_dir=".cache",
-                                         beam_runner='DirectRunner',
+                                         trust_remote_code=True,
                                          split='train')
     streamer = ParquetStreamer(filename, full_dataset.column_names)
 
@@ -271,9 +333,11 @@ def generate_base_dataset(data_dir,
 
     # TODO: benchmark if pyarrow compute is_in is significantly faster
     print("-- filtering base dataset 1 (title in)")
+    print("-- filtering base dataset 1 (title in)")
     filtered_dataset = shuffled_dataset.filter(title_is_in, num_proc=num_cores)
 
     if len(filtered_dataset) == 0:
+        print(f"   no matching base title for query titles {query_titles}")
         print(f"   no matching base title for query titles {query_titles}")
     else:
         print("-- processing filtered base dataset 1 (title in)")
@@ -297,7 +361,9 @@ def generate_base_dataset(data_dir,
         end_time = time.time()
         elapsed_time = end_time - start_time
         print(f'-- filter base dataset 2 (title not in). time taken: {elapsed_time} seconds')
+        print(f'-- filter base dataset 2 (title not in). time taken: {elapsed_time} seconds')
 
+        print("-- processing filtered base dataset 2 (title not in)")
         print("-- processing filtered base dataset 2 (title not in)")
         # filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
         p2, d2 = process_dataset(streamer,

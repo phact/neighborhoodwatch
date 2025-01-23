@@ -1,5 +1,4 @@
-import sys
-
+import os
 import cudf
 import pyarrow.parquet as pq
 import cupy as cp
@@ -9,6 +8,7 @@ import gc
 import math
 import numpy as np
 from pylibraft.neighbors.brute_force import knn
+from cuvs.neighbors import brute_force
 from cuvs.neighbors import brute_force
 import rmm
 from rich import print as rprint
@@ -68,13 +68,16 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
     total_gpu_memory = nvidia_smi.nvmlDeviceGetMemoryInfo(handle).total
 
     print("-- total memory:", total_gpu_memory)
+    print("-- total memory:", total_gpu_memory)
 
     nvidia_smi.nvmlShutdown()
 
     # Measure GPU memory usage after converting to cuDF dataframe
     memory_used = df.memory_usage().sum()
     print(f"-- memory_used {memory_used}")
+    print(f"-- memory_used {memory_used}")
     factor = math.ceil((total_gpu_memory * .2) / memory_used)
+    print(f"-- factor {factor}")
     print(f"-- factor {factor}")
     batch_size *= factor  # or any other increment factor you find suitable
 
@@ -83,7 +86,7 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
             if num_rows < batch_size:
                 print(f"-- the he calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
                 batch_size = num_rows
-                break 
+                break
 
             rmm.reinitialize(pool_allocator=False)
             batch = table.slice(0, batch_size)
@@ -97,13 +100,16 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
                 # to the last successful size.
                 batch_size = int(0.8 * batch_size)
                 print(f"-- found threshold {batch_size}")
+                print(f"-- found threshold {batch_size}")
                 break
             else:
+                print(f"-- memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
                 print(f"-- memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
                 batch_size *= 1.2
 
         except Exception as e:
             batch_size = int(0.8 * batch_size)
+            print(f"-- exception {e}, max batch size {batch_size}")
             print(f"-- exception {e}, max batch size {batch_size}")
             break
 
@@ -130,13 +136,24 @@ def get_embedding_count(table):
     return len(matching_columns)
 
 
-def prep_table(data_dir, filename, count, n):
+def prep_table(data_dir, filename, count, input_dimension, ignore_dimension_check=False):
     table = load_table(data_dir, filename, 0, count)
-    assert get_embedding_count(table) == n, f"Expected {n} embedding columns, got {get_embedding_count(table)} columns."
-    assert len(table) == count, f"Expected {count} rows, got {len(table)} rows."
-    column_names = ['text', 'document_id_idx']
-    for i in range(n):
+    total_dimensions = sum('embedding_' in c for c in table.column_names)
+
+    ## NOTE: For Voyage model with binary output type, the returned embedding length is 1/8 of the specified input_dimension
+    if not ignore_dimension_check:
+        assert (total_dimensions >= input_dimension and total_dimensions % input_dimension == 0), \
+            f"Input dimension {input_dimension} does not match the actual dimension {total_dimensions} in the table."
+
+    # Not sure if we really need to keep these 2 columns here
+    # in the "process_batches" function, we only select the float columns as per the following code:
+    # - df_numeric = df.select_dtypes(['float32', 'float64'])
+
+    # column_names = ['text', 'document_id_idx']
+    column_names = []
+    for i in range(total_dimensions):
         column_names.append(f'embedding_{i}')
+
     return drop_columns(table, column_names)
 
 
@@ -146,8 +163,11 @@ def compute_knn(data_dir,
                 query_count,
                 base_filename,
                 base_count,
-                mem_tune=True,
+                final_indecies_filename,
+                final_distances_filename,
+                mem_tune=False,
                 k=100,
+                ignore_dimension_check=False,
                 initial_batch_size=100000,
                 max_memory_threshold=0.1,
                 split=True):
@@ -156,9 +176,10 @@ def compute_knn(data_dir,
     batch_size = initial_batch_size
     # batch_size = 543680
 
-    n = dimensions
-    base_table = prep_table(data_dir, base_filename, base_count, n)
-    query_table = prep_table(data_dir, query_filename, query_count, n)
+    print(f"-- prepare query source table for brute-force KNN computation.")
+    query_table = prep_table(data_dir, query_filename, query_count, input_dimensions, ignore_dimension_check)
+    print(f"-- prepare base source table for brute-force KNN computation.")
+    base_table = prep_table(data_dir, base_filename, base_count, input_dimensions, ignore_dimension_check)
 
     if mem_tune:
         batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)
@@ -191,8 +212,10 @@ def process_batches(base_table,
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
 
+
         dataset_batch = base_table.slice(batch_offset, batch_length)
         df = cudf.DataFrame.from_arrow(dataset_batch)
+
 
         df_numeric = df.select_dtypes(['float32', 'float64'])
         cleanup(df)
@@ -214,17 +237,60 @@ def process_batches(base_table,
         for i in tqdm(range(splits)):
             offset = i * rows_per_split
             length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
+        if not split:
+            splits = 1
+
+        for i in tqdm(range(splits)):
+            offset = i * rows_per_split
+            length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
             query_batch = query_table.slice(offset, length)
+            query_batch = query_table.slice(offset, length)
 
+            df1 = cudf.DataFrame.from_arrow(query_batch)
+            df_numeric1 = df1.select_dtypes(['float32', 'float64'])
             df1 = cudf.DataFrame.from_arrow(query_batch)
             df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
             cleanup(df1)
             query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
+            cleanup(df1)
+            query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
 
             assert (k <= len(dataset))
+            assert (k <= len(dataset))
 
+            print(f"Dataset shape: {dataset.shape}, Query shape: {query.shape}")
+            cupydistances1 = None
+            cupyindices1 = None
+            if engine == 'raft':
+                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
+                                                    query.astype(np.float32),
+                                                    k)
+            elif engine == 'cuvs':
+                brute_force_index = brute_force.build(dataset, metric="cosine")
+                cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
+            elif engine == 'torch':
+                import torch
+                from torch.utils.dlpack import from_dlpack, to_dlpack
+                torch.device("cuda")
+                query_tensor = from_dlpack(query.toDlpack())
+                dataset_tensor = from_dlpack(dataset.toDlpack())
+
+                distance_batch = 1 - torch.matmul(query_tensor, dataset_tensor.T)
+                distances_tensor, indices_tensor = torch.topk(distance_batch, k, dim=1, largest=False)
+
+                cupydistances1 = cp.from_dlpack(distances_tensor)
+                cupyindices1 = cp.from_dlpack(indices_tensor)
+
+                cleanup(distance_batch, distances_tensor, indices_tensor)
+
+            #brute_force_index = brute_force.build(dataset.astype(np.float32), metric="cosine")
+            #brute_force_index = brute_force.build(dataset, metric="cosine")
+            #cp.cuda.Stream.null.synchronize()  # Synchronize after building the index
+            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query.astype(np.float32), k)
+            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
+            #cp.cuda.Stream.null.synchronize()  # Synchronize after search
             print(f"Dataset shape: {dataset.shape}, Query shape: {query.shape}")
             cupydistances1 = None
             cupyindices1 = None
@@ -260,9 +326,17 @@ def process_batches(base_table,
             distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
             # add batch_offset to indices
             indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
+            # add batch_offset to indices
+            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
 
             distances = cudf.concat([distances, distances1], ignore_index=True)
             indices = cudf.concat([indices, indices1], ignore_index=True)
+            distances = cudf.concat([distances, distances1], ignore_index=True)
+            indices = cudf.concat([indices, indices1], ignore_index=True)
+
+        distances.columns = distances.columns.astype(str)
+        indices.columns = indices.columns.astype(str)
 
         distances.columns = distances.columns.astype(str)
         indices.columns = indices.columns.astype(str)

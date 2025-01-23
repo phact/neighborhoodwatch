@@ -46,7 +46,6 @@ def merge_indices_and_distances(data_dir):
         final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
 
         for start in tqdm(range(0, batch_count)):
-
             final_indices = pd.DataFrame()
             final_distances = pd.DataFrame()
 
@@ -67,7 +66,7 @@ def merge_indices_and_distances(data_dir):
                     indices_batch = indices_table.slice(start, len(indices_table) - start * batch_size)
                     distances_batch = distances_table.slice(start, len(distances_table) - start * batch_size)
 
-                if ((final_indices.empty) & (final_distances.empty)):
+                if final_indices.empty & final_distances.empty:
                     final_indices = indices_batch
                     final_distances = distances_batch
                 else:
@@ -92,10 +91,12 @@ def merge_indices_and_distances(data_dir):
                     sorted_indices_np = np.take_along_axis(concatenated_indices_np, sorted_indices_np, axis=1)
 
                     # Convert the numpy arrays back to DataFrames only when necessary
-                    sorted_distances = pd.DataFrame(sorted_distances_np, index=concatenated_distances.index,
+                    sorted_distances = pd.DataFrame(sorted_distances_np,
+                                                    index=concatenated_distances.index,
                                                     columns=concatenated_distances.columns)
-                    sorted_indices = pd.DataFrame(sorted_indices_np, index=concatenated_indices.index,
-                                                columns=concatenated_indices.columns)
+                    sorted_indices = pd.DataFrame(sorted_indices_np,
+                                                  index=concatenated_indices.index,
+                                                  columns=concatenated_indices.columns)
 
                     # Select the top K distances and corresponding indices for each row
                     final_distances = sorted_distances.iloc[:, :k]
@@ -106,19 +107,10 @@ def merge_indices_and_distances(data_dir):
 
             # .copy() is required for https://pandas.pydata.org/pandas-docs/stable/user_guide/indexing.html#returning-a-view-versus-a-copy
             final_distances_copy = final_distances.copy()
-            final_distances_copy['RowNum'] = pd.Series(dtype=int)
-            final_distances_copy['RowNum'] = range(start, start + len(final_distances))
-
             final_indices_copy = final_indices.copy()
-            final_indices_copy['RowNum'] = pd.Series(dtype=int)
-            final_indices_copy['RowNum'] = range(start, start + len(final_distances))
 
             final_indices_writer.write_table(pa.Table.from_pandas(final_indices_copy))
             final_distances_writer.write_table(pa.Table.from_pandas(final_distances_copy))
 
         final_indices_writer.close()
         final_distances_writer.close()
-
-
-if __name__ == "__main__":
-    merge_indices_and_distances('.', 'intfloat/e5-query-v2', 10)
