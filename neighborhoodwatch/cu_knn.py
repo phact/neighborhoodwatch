@@ -272,37 +272,6 @@ def process_batches(base_table,
             #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query.astype(np.float32), k)
             #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
             #cp.cuda.Stream.null.synchronize()  # Synchronize after search
-            print(f"Dataset shape: {dataset.shape}, Query shape: {query.shape}")
-            cupydistances1 = None
-            cupyindices1 = None
-            if engine == 'raft':
-                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
-                                                    query.astype(np.float32),
-                                                    k)
-            elif engine == 'cuvs':
-                brute_force_index = brute_force.build(dataset, metric="cosine")
-                cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
-            elif engine == 'torch':
-                import torch
-                from torch.utils.dlpack import from_dlpack, to_dlpack
-                torch.device("cuda")
-                query_tensor = from_dlpack(query.toDlpack())
-                dataset_tensor = from_dlpack(dataset.toDlpack())
-
-                distance_batch = 1 - torch.matmul(query_tensor, dataset_tensor.T)
-                distances_tensor, indices_tensor = torch.topk(distance_batch, k, dim=1, largest=False)
-
-                cupydistances1 = cp.from_dlpack(distances_tensor)
-                cupyindices1 = cp.from_dlpack(indices_tensor)
-
-                cleanup(distance_batch, distances_tensor, indices_tensor)
-
-            #brute_force_index = brute_force.build(dataset.astype(np.float32), metric="cosine")
-            #brute_force_index = brute_force.build(dataset, metric="cosine")
-            #cp.cuda.Stream.null.synchronize()  # Synchronize after building the index
-            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query.astype(np.float32), k)
-            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
-            #cp.cuda.Stream.null.synchronize()  # Synchronize after search
 
             distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
             # add batch_offset to indices

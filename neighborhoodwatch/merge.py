@@ -62,12 +62,6 @@ def merge_indices_and_distances(data_dir):
                 indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/indices{i}.parquet")
                 distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/distances{i}.parquet")
 
-                rownum_index = indices_table.schema.get_field_index('RowNum')
-                indices_table = indices_table.remove_column(rownum_index)
-
-                rownum_index = distances_table.schema.get_field_index('RowNum')
-                distances_table = distances_table.remove_column(rownum_index)
-
                 if start != batch_count:
                     indices_batch = indices_table.slice(start, batch_size).to_pandas()
                     distances_batch = distances_table.slice(start, batch_size).to_pandas()
