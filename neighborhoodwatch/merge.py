@@ -58,7 +58,7 @@ def merge_indices_and_distances(data_dir):
             final_indices = pd.DataFrame()
             final_distances = pd.DataFrame()
 
-            for i in range(file_count):
+            for i in tqdm(range(file_count)):
                 indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/indices{i}.parquet")
                 distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/distances{i}.parquet")
 
