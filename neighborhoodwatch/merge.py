@@ -28,12 +28,21 @@ def get_file_count(data_dir):
     return file_count
 
 
+def read_ifvec_parquet_with_proper_schema(filename):
+    ifvec_table = pq.read_table(filename)
+    rownum_index = ifvec_table.schema.get_field_index('RowNum')
+    if rownum_index != -1:
+        ifvec_table.remove_column(rownum_index)
+
+    return ifvec_table
+
+
 def merge_indices_and_distances(data_dir):
     file_count = get_file_count(data_dir)
 
     if file_count > 0:
-        indices_table = pq.read_table(f"{data_dir}/indices0.parquet")
-        distances_table = pq.read_table(f"{data_dir}/distances0.parquet")
+        indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/indices0.parquet")
+        distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
 
@@ -50,8 +59,8 @@ def merge_indices_and_distances(data_dir):
             final_distances = pd.DataFrame()
 
             for i in range(file_count):
-                indices_table = pq.read_table(f"{data_dir}/indices{i}.parquet")
-                distances_table = pq.read_table(f"{data_dir}/distances{i}.parquet")
+                indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/indices{i}.parquet")
+                distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/distances{i}.parquet")
 
                 rownum_index = indices_table.schema.get_field_index('RowNum')
                 indices_table = indices_table.remove_column(rownum_index)
