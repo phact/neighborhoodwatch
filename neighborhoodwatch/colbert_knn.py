@@ -25,7 +25,7 @@ import logging
 from pathlib import Path
 from torch import Tensor
 
-from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup, tune_memory, prep_table, process_batches
+from neighborhoodwatch.cu_knn import tune_memory, process_batches
 from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
      ParquetStreamer
 from neighborhoodwatch.merge import merge_indices_and_distances
@@ -151,7 +151,8 @@ def process_source_dataset(streamer,
     return (cur_row, total_sentence_cnt, processed_token_embedding_cnt, detected_zero_text_embedding_cnt)
 
 
-def process_knn_computation(base_filename,
+def process_knn_computation(data_dir,
+                            base_filename,
                             base_count,
                             query_filename,
                             query_count,
@@ -183,7 +184,8 @@ def process_knn_computation(base_filename,
     assert (len(base_table) % batch_size == 0) or k <= (
             len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    process_batches(final_indices_filename,
+    process_batches(data_dir,
+                    final_indices_filename,
                     final_distances_filename,
                     base_table,
                     query_table,
@@ -400,7 +402,8 @@ Some example commands:\n
                                                      f"{model_prefix}_{input_dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}_normalized.parquet")
 
     section_time = time.time()
-    process_knn_computation(base_embed_token_filename,
+    process_knn_computation(data_dir,
+                            base_embed_token_filename,
                             args.base_token_count,
                             query_embed_token_filename,
                             args.query_token_count,
@@ -415,12 +418,7 @@ Some example commands:\n
     rprint(Markdown("---"), '')
     rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
-    merge_indices_and_distances(data_dir,
-                                model_prefix,
-                                input_dimensions,
-                                final_indecies_filename,
-                                final_distances_filename,
-                                args.k)
+    merge_indices_and_distances(data_dir)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 

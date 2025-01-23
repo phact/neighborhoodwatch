@@ -1,17 +1,19 @@
 import math
 import os
+import numpy as np
+import requests
+
 from abc import ABC, abstractmethod
 from enum import Enum
 
+from tqdm import tqdm
+
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
-from tqdm import tqdm
 from vertexai.preview.language_models import TextEmbeddingModel
 
-import requests
 import cohere
 import voyageai
-import numpy as np
 
 
 class EmbeddingModelName(Enum):
@@ -53,36 +55,37 @@ def get_default_model_dimension_size(model_name: str):
     assert is_valid_model_name(model_name)
 
     # OpenAI embedding models
-    if model_name == EmbeddingModelName.OPENAI_ADA_002 or model_name == EmbeddingModelName.OPENAI_V3_SMALL:
+    if model_name == EmbeddingModelName.OPENAI_ADA_002.value or model_name == EmbeddingModelName.OPENAI_V3_SMALL.value:
         return 1536
-    elif model_name == EmbeddingModelName.OPENAI_V3_LARGE:
+    elif model_name == EmbeddingModelName.OPENAI_V3_LARGE.value:
         return 3072
     # VertexAI embedding models
-    elif (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003 or
-          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004 or
-          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005):
+    elif (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003.value or
+          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004.value or
+          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005.value):
         return 768
     # HuggingFace embedding models
-    elif model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2:
+    elif model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2.value:
         return 1024
-    elif model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2:
+    elif model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2.value:
         return 768
-    elif model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2:
+    elif model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2.value:
         return 384
     # Nvidia models
-    elif model_name == EmbeddingModelName.NVIDIA_NEMO:
+    elif model_name == EmbeddingModelName.NVIDIA_NEMO.value:
         return 1024
     # Cohere models
-    elif model_name == EmbeddingModelName.COHERE_ENGLISH_V3:
+    elif model_name == EmbeddingModelName.COHERE_ENGLISH_V3.value:
         return 1024
-    elif model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3:
+    elif model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3.value:
         return 384
-    elif model_name == EmbeddingModelName.VOYAGE_3_LARGE:
+    # Voyage models
+    elif model_name == EmbeddingModelName.VOYAGE_3_LARGE.value:
         return 1024
-    elif model_name == EmbeddingModelName.VOYAGE_3_LITE:
+    elif model_name == EmbeddingModelName.VOYAGE_3_LITE.value:
         return 512
     # Colbert models
-    elif model_name == EmbeddingModelName.COLBERT_V2:
+    elif model_name == EmbeddingModelName.COLBERT_V2.value:
         return 128
 
 
@@ -90,10 +93,10 @@ def get_effective_embedding_size(model_name: str, output_dimension_size: int = N
     default_dimension_size = get_default_model_dimension_size(model_name)
 
     if output_dimension_size is not None:
-        if model_name == EmbeddingModelName.OPENAI_V3_SMALL or model_name == EmbeddingModelName.OPENAI_V3_LARGE:
+        if model_name == EmbeddingModelName.OPENAI_V3_SMALL.value or model_name == EmbeddingModelName.OPENAI_V3_LARGE.value:
             assert (output_dimension_size <= default_dimension_size)
             return output_dimension_size
-        elif model_name == EmbeddingModelName.VOYAGE_3_LARGE:
+        elif model_name == EmbeddingModelName.VOYAGE_3_LARGE.value:
             assert (output_dimension_size in [256, 512, 1024, 2048])
             return output_dimension_size
         else:
@@ -106,18 +109,21 @@ def get_effective_embedding_size(model_name: str, output_dimension_size: int = N
 class EmbeddingGenerator(ABC):
     def __init__(self,
                  model_name: str,
+                 chunk_size: int,
                  # output dimension; None if the model doesn't support this feature
-                 output_dimension: int = None,
-                 chunk_size: int = 128):
+                 output_dimension: int = None):
         self.model_name = model_name
         assert is_valid_model_name(self.model_name), \
             f"The given model name is invalid; must be one of: {get_valid_model_names_string()}"
 
+        # Most models have some restrictions on the size of the batch of the texts to be processed
+        #   in one call. E.g. Cohere's limit is 96. Otherwise, it will fail the API call.
+        assert chunk_size is not None and 0 < chunk_size <= 64
+
         self.model_dimension = get_default_model_dimension_size(self.model_name)
-        self.output_dimension = output_dimension
+        self.output_dimension = get_effective_embedding_size(self.model_name, output_dimension)
         self.chunk_size = chunk_size
 
-        assert self.chunk_size is not None and self.chunk_size > 0
         assert self.output_dimension is None or self.output_dimension > 0
 
     def generate_embedding(self, text_list, *args, **kwargs):
@@ -135,14 +141,16 @@ class EmbeddingGenerator(ABC):
         for i in tqdm(range(chunks)):
             start = i * self.chunk_size
             end = min(start + self.chunk_size, total_items)
+
             process = text_list[start:end]
             if "e5" in self.model_name:
                 process = ["query:" + s for s in process]
 
             try:
-                model_output = self._call_model_api(text_list, *args, **kwargs)
-                embeddings.append(item for item in model_output)
+                model_output = self._call_model_api(process, *args, **kwargs)
+                embeddings.extend(model_output)
             except Exception as e:
+                print(f"   >>> [WARN] failed to retrieve the embeddings: {e}")
                 for _ in process:
                     embeddings.append(zero_vector)
                 total_zero_embed_cnt += len(process)
@@ -168,11 +176,12 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
     def __init__(self,
                  model_name=EmbeddingModelName.OPENAI_V3_SMALL,
                  output_dimension_size=None):
-        assert (model_name == EmbeddingModelName.OPENAI_ADA_002 or
-                model_name == EmbeddingModelName.OPENAI_V3_SMALL or
-                model_name == EmbeddingModelName.OPENAI_V3_LARGE)
+        assert (model_name == EmbeddingModelName.OPENAI_ADA_002.value or
+                model_name == EmbeddingModelName.OPENAI_V3_SMALL.value or
+                model_name == EmbeddingModelName.OPENAI_V3_LARGE.value)
 
         super().__init__(model_name=model_name,
+                         chunk_size=64,
                          output_dimension=output_dimension_size)
 
         assert (0 < output_dimension_size <= self.model_dimension)
@@ -183,13 +192,14 @@ class OpenAIEmbeddingGenerator(EmbeddingGenerator):
         self.client = OpenAI()
 
     def _call_model_api(self, text_list: list, *args, **kwargs):
-        if self.model_name == EmbeddingModelName.OPENAI_ADA_002:
+        if self.model_name == EmbeddingModelName.OPENAI_ADA_002.value:
             results = self.client.embeddings.create(input=text_list,
                                                     model=self.model_name)
         else:
             results = self.client.embeddings.create(input=text_list,
                                                     model=self.model_name,
-                                                    dimensions=get_effective_embedding_size(self.model_name, self.output_dimension))
+                                                    dimensions=get_effective_embedding_size(self.model_name,
+                                                                                            self.output_dimension))
         embeddings = [item.embedding for item in results.data]
         return embeddings
 
@@ -198,11 +208,11 @@ class VertexAIEmbeddingGenerator(EmbeddingGenerator):
     def __init__(self,
                  model_name=EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005,
                  normalize_embed=False):
-        assert (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003 or
-                model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004 or
-                model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005)
+        assert (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003.value or
+                model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004.value or
+                model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005.value)
 
-        super().__init__(model_name=model_name)
+        super().__init__(model_name=model_name, chunk_size=64)
 
         self.client = TextEmbeddingModel.from_pretrained(self.model_name)
 
@@ -216,11 +226,11 @@ class IntfloatE5EmbeddingGenerator(EmbeddingGenerator):
     def __init__(self,
                  model_name=EmbeddingModelName.INTFLOAT_E5_BASE_V2,
                  normalize_embed=False):
-        assert (model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2 or
-                model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2 or
-                model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2)
+        assert (model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2.value or
+                model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2.value or
+                model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2.value)
 
-        super().__init__(model_name=model_name)
+        super().__init__(model_name=model_name, chunk_size=64)
 
         self.model = SentenceTransformer(model_name, trust_remote_code=True)
 
@@ -234,9 +244,9 @@ class NvdiaNemoEmbeddingGenerator(EmbeddingGenerator):
                  model_name=EmbeddingModelName.NVIDIA_NEMO,
                  embedding_srv_url='http://localhost:8080/v1/embeddings',
                  normalize_embed=False):
-        assert (model_name == EmbeddingModelName.NVIDIA_NEMO)
+        assert (model_name == EmbeddingModelName.NVIDIA_NEMO.value)
 
-        super().__init__(model_name=model_name)
+        super().__init__(model_name=model_name, chunk_size=64)
         self.embedding_srv_url = embedding_srv_url
         self.stand_headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
 
@@ -257,11 +267,14 @@ class NvdiaNemoEmbeddingGenerator(EmbeddingGenerator):
 
 class CohereEmbeddingV3Generator(EmbeddingGenerator):
     def __init__(self,
-                 model_name=EmbeddingModelName.COHERE_ENGLISH_V3):
-        assert (model_name == EmbeddingModelName.COHERE_ENGLISH_V3 or
-                model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3)
+                 model_name=EmbeddingModelName.COHERE_ENGLISH_V3.value):
+        assert (model_name == EmbeddingModelName.COHERE_ENGLISH_V3.value or
+                model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3.value)
 
-        super().__init__(model_name)
+        ## Cohere Doc (https://docs.cohere.com/v2/reference/embed):
+        #  - Maximum number of texts per call is 96.
+        #  - We recommend reducing the length of each text to be under 512 tokens for optimal quality.
+        super().__init__(model_name=model_name, chunk_size=64)
 
         if os.getenv("COHERE_API_KEY") is None:
             raise Exception("'COHERE_API_KEY' environment variable is not set")
@@ -290,19 +303,21 @@ class VoyageAIEmbeddingGenerator(EmbeddingGenerator):
                  output_dtype='float',
                  output_dimension_size=None):
 
-        assert (model_name == EmbeddingModelName.VOYAGE_3_LARGE or
-                model_name == EmbeddingModelName.VOYAGE_3_LITE)
+        assert (model_name == EmbeddingModelName.VOYAGE_3_LARGE.value or
+                model_name == EmbeddingModelName.VOYAGE_3_LITE.value)
 
         assert input_type in ['query', 'document']
 
-        # https://docs.voyageai.com/docs/embeddings
-        if model_name == EmbeddingModelName.VOYAGE_3_LARGE:
+        if model_name == EmbeddingModelName.VOYAGE_3_LARGE.value:
             assert output_dimension_size is None or output_dimension_size in [256, 512, 1024, 2048]
             assert output_dtype in ['float', 'int8', 'uint8', 'binary', 'ubinary']
-        elif model_name == EmbeddingModelName.VOYAGE_3_LITE:
+        elif model_name == EmbeddingModelName.VOYAGE_3_LITE.value:
             assert output_dtype in ['float']
 
+        ## Cohere Doc (https://docs.voyageai.com/docs/embeddings#python-api):
+        #  - Maximum number of texts per call is 128.
         super().__init__(model_name=model_name,
+                         chunk_size=64,
                          output_dimension=output_dimension_size)
 
         self.input_type = input_type
@@ -317,10 +332,12 @@ class VoyageAIEmbeddingGenerator(EmbeddingGenerator):
         results = self.vo_client.embed(text,
                                        model=self.model_name,
                                        input_type=self.input_type,
-                                       output_dimension=get_effective_embedding_size(self.model_name, self.output_dimension),
+                                       output_dimension=get_effective_embedding_size(self.model_name,
+                                                                                     self.output_dimension),
                                        output_dtype=self.output_dtype)
 
         output = [item for item in results.embeddings]
+
         return output
 
 
@@ -328,35 +345,35 @@ def get_embedding_generator_for_model(model_name,
                                       output_dimension=None,
                                       dataset_type=None,
                                       output_dtype=None):
-
     assert is_valid_model_name(model_name)
 
-    if model_name == EmbeddingModelName.OPENAI_ADA_002:
+    if model_name == EmbeddingModelName.OPENAI_ADA_002.value:
         return OpenAIEmbeddingGenerator(model_name=model_name)
-    elif model_name == EmbeddingModelName.OPENAI_V3_SMALL or model_name == EmbeddingModelName.OPENAI_V3_LARGE:
+    elif (model_name == EmbeddingModelName.OPENAI_V3_SMALL.value or
+          model_name == EmbeddingModelName.OPENAI_V3_LARGE.value):
         return OpenAIEmbeddingGenerator(model_name=model_name,
                                         output_dimension_size=output_dimension)
-    elif (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003 or
-          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004 or
-          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005):
+    elif (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003.value or
+          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004.value or
+          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005.value):
         return VertexAIEmbeddingGenerator(model_name=model_name)
-    elif model_name == EmbeddingModelName.NVIDIA_NEMO:
+    elif (model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2.value or
+          model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2.value or
+          model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2.value):
+        return IntfloatE5EmbeddingGenerator(model_name=model_name)
+    elif model_name == EmbeddingModelName.NVIDIA_NEMO.value:
         return NvdiaNemoEmbeddingGenerator(model_name=model_name)
-    elif (model_name == EmbeddingModelName.COHERE_ENGLISH_V3 or
-          model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3):
+    elif (model_name == EmbeddingModelName.COHERE_ENGLISH_V3.value or
+          model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3.value):
         return CohereEmbeddingV3Generator(model_name=model_name)
-    elif model_name == EmbeddingModelName.VOYAGE_3_LARGE:
+    elif model_name == EmbeddingModelName.VOYAGE_3_LARGE.value:
         return VoyageAIEmbeddingGenerator(model_name=model_name,
                                           input_type=dataset_type,
                                           output_dtype=output_dtype,
                                           output_dimension_size=output_dimension)
-    elif model_name == EmbeddingModelName.VOYAGE_3_LITE:
+    elif model_name == EmbeddingModelName.VOYAGE_3_LITE.value:
         return VoyageAIEmbeddingGenerator(model_name=model_name,
                                           input_type=dataset_type,
                                           output_dtype=output_dtype)
-    elif (model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2 or
-          model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2 or
-          model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2):
-        return IntfloatE5EmbeddingGenerator(model_name=model_name)
     else:
         return None

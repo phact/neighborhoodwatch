@@ -14,6 +14,7 @@ from neighborhoodwatch.nw_utils import *
 from cuvs.distance import pairwise_distance
 from cuvs.neighbors import brute_force
 import torch
+
 torch.device("cuda")
 
 
@@ -55,25 +56,25 @@ def get_nth_vector(data_dir, filename, n):
         format_char = 'i'
     with open(full_filename, 'rb') as f:
         dimension = struct.unpack('i', f.read(4))[0]
-        f.seek(4 * n * (1+dimension), 1)
-        if (os.path.getsize(full_filename) < f.tell() + 4 * dimension):
+        f.seek(int(4 * n * (1 + dimension)), 1)
+        if os.path.getsize(full_filename) < f.tell() + 4 * dimension:
             print("file size is less than expected")
-        #f.seek(4 * n * (dimension), 1)
         assert os.path.getsize(full_filename) >= f.tell() + 4 * dimension
         vector = struct.unpack(format_char * dimension, f.read(4 * dimension))
 
     return vector
 
 
-def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_columns, ignore_dimension_check=False):
+def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_columns):
     full_filename = get_full_filename(data_dir, filename)
+
     with open(full_filename, 'wb') as f:
         for index, row in tqdm(df.iterrows()):
             # potentially remove rownum field
             if len(row.values) == num_columns + 1:
                 row = row[:-1]
-            if not ignore_dimension_check:
-                assert len(row.values) == num_columns, f"Expected {num_columns} values, got {len(row.values)} [filename: {filename}]"
+            assert len(
+                row.values) == num_columns, f"Expected {num_columns} values, got {len(row.values)} [filename: {filename}]"
             vec = row.values.astype(np.int32)
             if type_char == 'f':
                 vec = row.values.astype(np.float32)
@@ -83,21 +84,9 @@ def write_ivec_fvec_from_dataframe(data_dir, filename, df, type_char, num_column
 
 
 def read_and_extract(data_dir, input_parquet, rowcount, dimensions, column_names=None):
-def read_and_extract(data_dir, input_parquet, rowcount, dimensions, column_names=None):
     full_filename = get_full_filename(data_dir, input_parquet)
     table = pq.read_table(full_filename)
     table = table.slice(0, rowcount)
-    table = table.slice(0, rowcount)
-
-    if column_names is None:
-        column_names = []
-        for i in range(dimensions):
-            column_names.append(f'embedding_{i}')
-        columns_to_drop = list(set(table.schema.names) - set(column_names))
-        for col in columns_to_drop:
-            if col in table.schema.names:  # Check if the column exists in the table
-                col_index = table.schema.get_field_index(col)
-                table = table.remove_column(col_index)
 
     if column_names is None:
         column_names = []
@@ -113,6 +102,10 @@ def read_and_extract(data_dir, input_parquet, rowcount, dimensions, column_names
     return df
 
 
+def is_empty_file(filename):
+    return not os.path.exists(filename) or os.path.getsize(filename) == 0
+
+
 def generate_query_vectors_fvec(data_dir,
                                 input_parquet,
                                 query_count,
@@ -122,7 +115,7 @@ def generate_query_vectors_fvec(data_dir,
                                 hdf5_file=None):
     df = read_and_extract(data_dir, input_parquet, query_count, dimensions)
 
-    if not os.path.exists(query_vectors_fvec_file):
+    if not is_empty_file(query_vectors_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, query_vectors_fvec_file, df, 'f', dimensions)
     else:
         print(f"File {query_vectors_fvec_file} already exists")
@@ -142,7 +135,7 @@ def generate_base_vectors_fvec(data_dir,
                                hdf5_file=None):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions, column_names)
 
-    if not os.path.exists(base_vectors_fvec_file):
+    if not is_empty_file(base_vectors_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, base_vectors_fvec_file, df, 'f', dimensions)
     else:
         print(f"File {base_vectors_fvec_file} already exists")
@@ -160,7 +153,7 @@ def generate_distances_fvec(data_dir,
                             hdf5_file=None):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
 
-    if not os.path.exists(distances_fvec_file):
+    if not is_empty_file(distances_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, distances_fvec_file, df, 'f', k)
     else:
         print(f"File {distances_fvec_file} already exists")
@@ -173,15 +166,15 @@ def generate_distances_fvec(data_dir,
 def generate_indices_ivec(data_dir,
                           input_parquet,
                           k,
-                          distances_fvec_file,
+                          indices_fvec_file,
                           output_hdf5=True,
                           hdf5_file=None):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
 
-    if not os.path.exists(distances_fvec_file):
-        write_ivec_fvec_from_dataframe(data_dir, distances_fvec_file, df, 'i', k)
+    if not is_empty_file(indices_fvec_file):
+        write_ivec_fvec_from_dataframe(data_dir, indices_fvec_file, df, 'i', k)
     else:
-        print(f"File {distances_fvec_file} already exists")
+        print(f"File {indices_fvec_file} already exists")
 
     if output_hdf5:
         # no-op if hdf5 file exists and the 'test' group also exists
@@ -193,10 +186,10 @@ def generate_output_files(data_dir,
                           dimensions,
                           base_vectors_parquet,
                           query_vectors_parquet,
-                          final_indices_parquet,
-                          final_distances_parquet,
                           base_count,
                           query_count,
+                          final_indices_parquet,
+                          final_distances_parquet,
                           k,
                           output_hdf5=True,
                           column_names=None,
@@ -207,15 +200,15 @@ def generate_output_files(data_dir,
     hdf5_filename = get_full_filename(data_dir, hdf5_filename)
 
     if output_dtype is not None:
-        query_vector_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_query_vectors_{query_count}'
-        base_vector_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_base_vectors_{base_count}'
-        indices_ivec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_indices_b{base_count}_q{query_count}_k{k}'
-        distances_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_{output_dtype}_distances_b{base_count}_q{query_count}_k{k}'
+        query_vector_fvec_base = f'{model_prefix}_{dimensions}_{output_dtype}_query_vectors_{query_count}'
+        base_vector_fvec_base = f'{model_prefix}_{dimensions}_{output_dtype}_base_vectors_{base_count}'
+        indices_ivec_base = f'{model_prefix}_{dimensions}_{output_dtype}_indices_b{base_count}_q{query_count}_k{k}'
+        distances_fvec_base = f'{model_prefix}_{dimensions}_{output_dtype}_distances_b{base_count}_q{query_count}_k{k}'
     else:
-        query_vector_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_query_vectors_{query_count}'
-        base_vector_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_base_vectors_{base_count}'
-        indices_ivec_base = f'{data_dir}/{model_prefix}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}'
-        distances_fvec_base = f'{data_dir}/{model_prefix}_{dimensions}_distances_b{base_count}_q{query_count}_k{k}'
+        query_vector_fvec_base = f'{model_prefix}_{dimensions}_query_vectors_{query_count}'
+        base_vector_fvec_base = f'{model_prefix}_{dimensions}_base_vectors_{base_count}'
+        indices_ivec_base = f'{model_prefix}_{dimensions}_indices_b{base_count}_q{query_count}_k{k}'
+        distances_fvec_base = f'{model_prefix}_{dimensions}_distances_b{base_count}_q{query_count}_k{k}'
 
     query_vector_fvec_file = f'{query_vector_fvec_base}.fvec'
     generate_query_vectors_fvec(data_dir,
@@ -246,7 +239,7 @@ def generate_output_files(data_dir,
     generate_indices_ivec(data_dir,
                           final_indices_parquet,
                           k,
-                          indices_ivec_base,
+                          indices_ivec_file,
                           output_hdf5,
                           hdf5_filename)
     rprint(Markdown(f"*`{indices_ivec_file}`* - "
@@ -264,6 +257,8 @@ def generate_output_files(data_dir,
                     f"distances count: `{count_vectors(data_dir, distances_fvec_file)}`, "
                     f"k: `{len(get_first_vector(data_dir, distances_fvec_file))}`"))
 
+    return query_vector_fvec_file, base_vector_fvec_file, indices_ivec_file, distances_fvec_file
+
 
 def write_hdf5(data_dir, df, filename, group):
     data = df.values
@@ -275,8 +270,49 @@ def write_hdf5(data_dir, df, filename, group):
             f.create_dataset(group, data=data)
 
 
-def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec, columns=None,
-                   input_parquet=None):
+def validate_files(data_dir,
+                   query_vector_fvec,
+                   base_vector_fvec,
+                   indices_ivec,
+                   distances_fvec):
+    zero_query_vector_count = 0
+    total_query_vector_count = count_vectors(data_dir, query_vector_fvec)
+    total_mismatch_count = 0
+
+    for n in range(total_query_vector_count):
+        nth_query_vector = get_nth_vector(data_dir, query_vector_fvec, n)
+        first_indexes = get_nth_vector(data_dir, indices_ivec, n)
+        distance_vector = get_nth_vector(data_dir, distances_fvec, n)
+
+        if np.count_nonzero(nth_query_vector) == 0:
+            print(f"Skipping zero query vector {n}/{total_query_vector_count}")
+            zero_query_vector_count += 1
+            continue
+
+        col = 0
+        for index in first_indexes:
+            base_vector = get_nth_vector(data_dir, base_vector_fvec, index)
+            similarity = dot_product(nth_query_vector, base_vector)
+            distance = distance_vector[col]
+            if not np.isclose((1 - similarity), distance / 2):
+                total_mismatch_count += 1
+                print(
+                    f"Expected 1 - similarity {1 - similarity} to equal distance {distance} for query vector {n} and base vector {index}")
+                print(f"Difference {1 - similarity - distance / 2}")
+                # print(base_vector)
+                # print(nth_query_vector)
+            col += 1
+
+    print(f"Total mismatch count: {total_mismatch_count}")
+
+
+def validate_files_colbert(data_dir,
+                           query_vector_fvec,
+                           base_vector_fvec,
+                           indices_ivec,
+                           distances_fvec,
+                           columns=None,
+                           input_parquet=None):
     zero_query_vector_count = 0
     total_query_vector_count = count_vectors(data_dir, query_vector_fvec)
     total_mismatch_count = 0
@@ -300,6 +336,7 @@ def validate_files(data_dir, query_vector_fvec, base_vector_fvec, indices_ivec, 
             base_vector = get_nth_vector(data_dir, base_vector_fvec, index)
             similarity = dot_product(nth_query_vector, base_vector)
             distance = 1 - distance_vector[col]
+
             assert distance >= last_distance, f"Expected distance {distance} to be greater than last distance {last_distance}"
             last_distance = distance
             # assert similarity <= last_similarity, f"Expected similarity {similarity} to be less than last similarity {last_similarity}"

@@ -38,13 +38,15 @@ openai = "^1.10.0"
 google-cloud-aiplatform = "^1.35.0"
 h5py = "^3.10.0"
 #sklearn = "0.0.post7"
-sentence-transformers = "2.2.2"
+sentence-transformers = ">=2.2.2"
 #protobuf = "4.24.1"
 protobuf = "4.24.3"
 colbert-ai = "^0.2.18 "
 cohere= "^5.1.6"
-
+voyageai = "^0.3.2"
 torch = "^2.4.1"
+huggingface-hub = "^0.25.2"
+
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
 

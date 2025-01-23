@@ -2,7 +2,6 @@ import math
 import os
 import multiprocessing
 import time
-from abc import ABC, abstractmethod
 
 import spacy
 import datasets
@@ -11,14 +10,10 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pyarrow.compute as pc
-import requests
 
 from neighborhoodwatch.model_generator import EmbeddingGenerator, get_embedding_generator_for_model, \
     CohereEmbeddingV3Generator
 from neighborhoodwatch.nw_utils import *
-
-import cohere
-import voyageai
 
 nlp = spacy.blank(f"{BASE_DATASET_LANG}")
 nlp.add_pipe("sentencizer")
@@ -98,9 +93,7 @@ def get_batch_embeddings_from_generator(text_list, generator, dataset_type=None)
 
 def get_embeddings_from_map(text_map, generator, dataset_type=None):
     flattened_sentences = [item for _, value_list in text_map for item in value_list]
-
     embedding_array = generator.generate_embedding(flattened_sentences, generator)
-
     iterator = iter(embedding_array)
     return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map]
 
@@ -132,6 +125,7 @@ def process_dataset(streamer,
                                                                       output_dimension=output_dimension,
                                                                       dataset_type=dataset_type,
                                                                       output_dtype=output_dtype)
+    assert generator is not None
 
     for row in tqdm(dataset):
         last_row = row_counter == len(dataset) - 1
@@ -177,7 +171,8 @@ def process_dataset(streamer,
                     embedding_counter += 1
                     if ((embedding_counter >= row_count or last_row) and
                             (len(meta_array) > 0) and (len(embedding_array) > 0)):
-                        print(f"Total embeddings so far {embedding_counter} with {skipped_embedding_cnt} skipped out of {row_count}")
+                        print(f"Total {embedding_counter} embeddings processed so far with {skipped_embedding_cnt} "
+                              f"skipped out of total count {row_count}")
                         streamer.stream_to_parquet(meta_array, embedding_array)
                         return embedding_counter, skipped_embedding_cnt
 
@@ -266,7 +261,7 @@ class ParquetStreamer:
             print(f"Finished streaming to {self.filename}")
 
 
-def generate_query_dataset(data_dir, row_count, model_name, output_dimension=None, output_dtype=None):
+def generate_query_dataset(data_dir, model_name, row_count, output_dimension=None, output_dtype=None):
     if output_dtype is not None:
         filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_query_vector_data_{row_count}"
     else:
@@ -296,13 +291,13 @@ def generate_query_dataset(data_dir, row_count, model_name, output_dimension=Non
 
 
 def generate_base_dataset(data_dir,
+                          model_name,
                           query_vector_filename,
                           row_count,
-                          model_name,
                           output_dimension=None,
                           output_dtype=None):
     processed_count = 0
-    detected_zero_count = 0
+    skipped_count = 0
 
     if output_dtype is not None:
         filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_base_vector_data_{row_count}"
@@ -334,11 +329,9 @@ def generate_base_dataset(data_dir,
 
     # TODO: benchmark if pyarrow compute is_in is significantly faster
     print("-- filtering base dataset 1 (title in)")
-    print("-- filtering base dataset 1 (title in)")
     filtered_dataset = shuffled_dataset.filter(title_is_in, num_proc=num_cores)
 
     if len(filtered_dataset) == 0:
-        print(f"   no matching base title for query titles {query_titles}")
         print(f"   no matching base title for query titles {query_titles}")
     else:
         print("-- processing filtered base dataset 1 (title in)")
@@ -362,9 +355,7 @@ def generate_base_dataset(data_dir,
         end_time = time.time()
         elapsed_time = end_time - start_time
         print(f'-- filter base dataset 2 (title not in). time taken: {elapsed_time} seconds')
-        print(f'-- filter base dataset 2 (title not in). time taken: {elapsed_time} seconds')
 
-        print("-- processing filtered base dataset 2 (title not in)")
         print("-- processing filtered base dataset 2 (title not in)")
         # filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
         p2, d2 = process_dataset(streamer,

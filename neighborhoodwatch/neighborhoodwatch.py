@@ -2,7 +2,7 @@ import argparse
 
 from neighborhoodwatch.generate_dataset import generate_query_dataset, generate_base_dataset
 from neighborhoodwatch.model_generator import get_valid_model_names_string, get_effective_embedding_size, \
-    is_valid_model_name
+    is_valid_model_name, EmbeddingModelName
 from neighborhoodwatch.parquet_to_format import generate_output_files, validate_files
 from neighborhoodwatch.merge import merge_indices_and_distances
 from neighborhoodwatch.cu_knn import compute_knn
@@ -14,6 +14,8 @@ import sys
 from rich import print as rprint
 from rich.markdown import Markdown
 import time
+
+from tests.conftest import model_name
 
 
 def cleanup_partial_parquet():
@@ -104,6 +106,7 @@ Some example commands:\n
                                             args.query_count,
                                             output_dimension,
                                             output_dtype)
+    rprint(Markdown(f"(**Query source file**: `{query_filename}`)"))
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -116,6 +119,7 @@ Some example commands:\n
                                           args.base_count,
                                           output_dimension,
                                           output_dtype)
+    rprint(Markdown(f"(**Base source file**: `{base_filename}`)"))
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -149,23 +153,23 @@ Some example commands:\n
 
     rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
-    merge_indices_and_distances(args.data_dir)
+    merge_indices_and_distances(data_dir)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
     rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
-    query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = \
-        generate_output_files(args.data_dir,
+    query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec = \
+        generate_output_files(data_dir,
                               model_prefix,
                               output_dimension,
-                              f"final_indices.parquet",
                               base_filename,
                               query_filename,
-                              f"final_distances.parquet",
                               args.base_count,
                               args.query_count,
+                              f"final_indices.parquet",
+                              f"final_distances.parquet",
                               args.k,
                               args.gen_hdf5)
     rprint(Markdown(
@@ -178,11 +182,19 @@ Some example commands:\n
         if yes_no_str == 'y' or yes_no_str == 'yes':
             rprint(Markdown("**Validating ivec's and fvec's ......** "), '')
             section_time = time.time()
-            validate_files(data_dir,
-                           query_vector_fvec,
-                           base_vector_fvec,
-                           indices_ivec,
-                           distances_fvec)
+
+            if model_name != EmbeddingModelName.COLBERT_V2.value:
+                validate_files(data_dir,
+                               query_vector_fvec,
+                               base_vector_fvec,
+                               indices_ivec,
+                               distances_fvec)
+            else:
+                validate_files_colbert(data_dir,
+                                       query_vector_fvec,
+                                       base_vector_fvec,
+                                       indices_ivec,
+                                       distances_fvec)
             rprint(Markdown(
                 f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
             rprint(Markdown("---"), '')

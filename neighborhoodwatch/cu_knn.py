@@ -23,7 +23,7 @@ from neighborhoodwatch.nw_utils import *
 ## 
 
 
-def stream_cudf_to_parquet(df, chunk_size, filename):
+def stream_cudf_to_parquet(data_dir, filename, df, chunk_size):
     """
     Stream a cuDF DataFrame to a single Parquet file in chunks.
 
@@ -44,7 +44,7 @@ def stream_cudf_to_parquet(df, chunk_size, filename):
         table_chunk = cudf.DataFrame.to_arrow(df_chunk)
 
         if writer is None:
-            writer = pq.ParquetWriter(filename, table_chunk.schema)
+            writer = pq.ParquetWriter(f"{get_full_filename(data_dir,filename)}", table_chunk.schema)
 
         writer.write_table(table_chunk)
 
@@ -129,14 +129,12 @@ def get_embedding_count(table):
     return len(matching_columns)
 
 
-def prep_table(data_dir, filename, count, input_dimension, ignore_dimension_check=False):
+def prep_table(data_dir, filename, count, dimension):
     table = load_table(data_dir, filename, 0, count)
     total_dimensions = sum('embedding_' in c for c in table.column_names)
 
-    ## NOTE: For Voyage model with binary output type, the returned embedding length is 1/8 of the specified input_dimension
-    if not ignore_dimension_check:
-        assert (total_dimensions >= input_dimension and total_dimensions % input_dimension == 0), \
-            f"Input dimension {input_dimension} does not match the actual dimension {total_dimensions} in the table."
+    assert total_dimensions == dimension, \
+        f"The target dimension {dimension} does not match the actual dimension {total_dimensions} in the table."
 
     # Not sure if we really need to keep these 2 columns here
     # in the "process_batches" function, we only select the float columns as per the following code:
@@ -156,11 +154,8 @@ def compute_knn(data_dir,
                 query_count,
                 base_filename,
                 base_count,
-                final_indecies_filename,
-                final_distances_filename,
                 mem_tune=False,
                 k=100,
-                ignore_dimension_check=False,
                 initial_batch_size=100000,
                 max_memory_threshold=0.1,
                 split=True):
@@ -170,9 +165,9 @@ def compute_knn(data_dir,
     # batch_size = 543680
 
     print(f"-- prepare query source table for brute-force KNN computation.")
-    query_table = prep_table(data_dir, query_filename, query_count, input_dimensions, ignore_dimension_check)
+    query_table = prep_table(data_dir, query_filename, query_count, dimensions)
     print(f"-- prepare base source table for brute-force KNN computation.")
-    base_table = prep_table(data_dir, base_filename, base_count, input_dimensions, ignore_dimension_check)
+    base_table = prep_table(data_dir, base_filename, base_count, dimensions)
 
     if mem_tune:
         batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)
@@ -181,7 +176,7 @@ def compute_knn(data_dir,
     assert (len(base_table) % batch_size == 0) or k <= (len(base_table) % batch_size), \
         f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    process_batches(base_table, query_table, batch_count, batch_size, k, split)
+    process_batches(data_dir, base_table, query_table, batch_count, batch_size, k, split)
 
 
 def cleanup(*args):
@@ -194,7 +189,8 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(base_table,
+def process_batches(data_dir,
+                    base_table,
                     query_table, 
                     batch_count, 
                     batch_size, 
@@ -205,10 +201,8 @@ def process_batches(base_table,
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
 
-
         dataset_batch = base_table.slice(batch_offset, batch_length)
         df = cudf.DataFrame.from_arrow(dataset_batch)
-
 
         df_numeric = df.select_dtypes(['float32', 'float64'])
         cleanup(df)
@@ -286,11 +280,11 @@ def process_batches(base_table,
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        stream_cudf_to_parquet(distances, 100000, f'distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'indices{start}.parquet')
+        stream_cudf_to_parquet(data_dir, f'distances{start}.parquet', distances, 100000)
+        stream_cudf_to_parquet(data_dir, f'indices{start}.parquet', indices, 100000)
 
         cleanup(df_numeric, distances, indices, dataset)
 
-    print("completed processing batches")
-    print("final distances shape: ", distances.shape)
-    print("final indices shape: ", indices.shape)
+    # print("completed processing batches")
+    # print("final distances shape: ", distances.shape)
+    # print("final indices shape: ", indices.shape)
