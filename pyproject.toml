@@ -12,11 +12,6 @@ rmm-cu12 = {url = "https://pypi.nvidia.com/rmm-cu12/rmm_cu12-24.8.2-cp311-cp311-
 pylibraft-cu12 = {url = "https://pypi.nvidia.com/pylibraft-cu12/pylibraft_cu12-24.8.1-cp311-cp311-manylinux_2_28_x86_64.whl"}
 ucx-py-cu12 = {url = "https://pypi.nvidia.com/ucx-py-cu12/ucx_py_cu12-0.39.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux_2_28_x86_64.whl"}
 raft-dask-cu12 = {url = "https://pypi.nvidia.com/raft-dask-cu12/raft_dask_cu12-24.8.1-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=741cdcee6862acc547db69e6cc808248a47b82fc7f9a9353b595a2e711c8ea2d"}
-python = ">=3.11,<3.13"
-rmm-cu12 = {url = "https://pypi.nvidia.com/rmm-cu12/rmm_cu12-24.8.2-cp311-cp311-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl"}
-pylibraft-cu12 = {url = "https://pypi.nvidia.com/pylibraft-cu12/pylibraft_cu12-24.8.1-cp311-cp311-manylinux_2_28_x86_64.whl"}
-ucx-py-cu12 = {url = "https://pypi.nvidia.com/ucx-py-cu12/ucx_py_cu12-0.39.2-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.manylinux_2_28_x86_64.whl"}
-raft-dask-cu12 = {url = "https://pypi.nvidia.com/raft-dask-cu12/raft_dask_cu12-24.8.1-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=741cdcee6862acc547db69e6cc808248a47b82fc7f9a9353b595a2e711c8ea2d"}
 cachetools = "5.3.1"
 cupy-cuda12x = "12.2.0"
 cython = "3.0.0"
@@ -32,7 +27,6 @@ scipy = "1.11.2"
 threadpoolctl = "3.2.0"
 tqdm = "4.66.1"
 treelite-runtime = "3.2.0"
-typing-extensions = "4.7.1"
 cudf-cu12 = {url = "https://pypi.nvidia.com/cudf-cu12/cudf_cu12-24.8.2-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=d93d3c6985d5ef180c68482915a14a0f2503f1d5c1b3c23333e56b9de28295a8"}
 dask-cudf-cu12 = {url = "https://pypi.nvidia.com/dask-cudf-cu12/dask_cudf_cu12-24.8.2-py3-none-any.whl"}
 cuml-cu12 = {url = "https://pypi.nvidia.com/cuml-cu12/cuml_cu12-24.8.0-cp311-cp311-manylinux_2_28_x86_64.whl#sha256=5d2bac0155957058e3407bf1d7e53dbbda42dc0c50a0334dcf02ebe64d1c94fd"}
@@ -44,19 +38,13 @@ openai = "^1.10.0"
 google-cloud-aiplatform = "^1.35.0"
 h5py = "^3.10.0"
 #sklearn = "0.0.post7"
-sentence-transformers = ">=2.2.2"
-sentence-transformers = ">=2.2.2"
+sentence-transformers = "2.2.2"
 #protobuf = "4.24.1"
 protobuf = "4.24.3"
 colbert-ai = "^0.2.18 "
 cohere= "^5.1.6"
-voyageai = "^0.3.2"
-torch = "^2.4.1"
-colbert-ai = "^0.2.18 "
-cohere= "^5.1.6"
-voyageai = "^0.3.2"
-torch = "^2.4.1"
 
+torch = "^2.4.1"
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.2"
 
