@@ -282,9 +282,9 @@ def process_dataset_batches(data_dir,
 
         distances['RowNum'] = range(0, len(distances))
         indices['RowNum'] = range(0, len(indices))
- 
-        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet')
+
+        stream_cudf_to_parquet(distances, 100000, f'distances{i}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'indices{i}.parquet')
 
         cleanup(base_ds, base_df_numeric, query_ds, query_df_numeric, 
                 distances, indices, distances_q, indices_q, 

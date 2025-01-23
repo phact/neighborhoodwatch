@@ -1,6 +1,9 @@
-import urllib.request
-import transformers
+from collections import OrderedDict
+
+import numpy as np
 from datasets import get_dataset_config_names
+
+from neighborhoodwatch.model_generator import get_default_model_dimension_size, EmbeddingModelName
 
 BASE_DATASET = "wikipedia"
 BASE_DATASET_LANG = "en"
@@ -10,16 +13,6 @@ BASE_CONFIG = f"{BASE_DATASET_VERSION}.{BASE_DATASET_LANG}"
 QUERY_DATASET = "squad"
 
 
-# TODO: add a check for the openai api key
-def check_openai_api_key():
-    pass
-
-
-# TODO: add a check for the gcp credentials
-def check_gcp_credentials():
-    pass
-
-
 # Check whether the dataset exists remotely
 def check_dataset_exists_remote():
     configs = get_dataset_config_names(BASE_DATASET)
@@ -27,36 +20,6 @@ def check_dataset_exists_remote():
         return True
     else:
         return False
-
-
-# Programmatically get the embedding size from the model name
-# No need for manual input of the dimensions
-def get_embedding_size(model_name: str, reduced_dimension_size: int):
-    # OpenAI embedding models
-    if model_name == 'text-embedding-ada-002' or model_name == 'text-embedding-3-small':
-        default_model_dimension = 1536
-    elif model_name == 'text-embedding-3-large':
-        default_model_dimension = 3072
-    # VertexAI embedding models
-    elif model_name == 'textembedding-gecko':
-        default_model_dimension = 768
-    # HuggingFace embedding models
-    elif model_name == 'intfloat/e5-large-v2':
-        default_model_dimension = 1024
-    elif model_name == 'intfloat/e5-base-v2':
-        default_model_dimension = 768
-    elif model_name == 'intfloat/e5-small-v2':
-        default_model_dimension = 384
-    else:
-        raise f"Unsupported model_name: {model_name}"
-
-    # Reduced output dimension only applies to OpenAI latest text embedding models
-    if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':
-        if reduced_dimension_size is not None:
-            assert (reduced_dimension_size <= default_model_dimension)
-        return min(default_model_dimension, reduced_dimension_size)
-    else:
-        return default_model_dimension
 
 
 def get_full_filename(data_dir, filename):
@@ -72,3 +35,24 @@ def get_model_prefix(model_name):
     else:
         model_prefix = "ada_002"
     return model_prefix
+
+
+def remove_duplicate_embeddings(source_array):
+    cnt1 = len(source_array)
+    ## don't maintain the original order
+    # unique_array = list(set(map(tuple, source_array)))
+    ## maintain the original order
+    unique_array = list(OrderedDict.fromkeys(map(tuple, source_array)))
+    cnt2 = len(unique_array)
+
+    return unique_array, cnt1 - cnt2,
+
+
+def is_zero_embedding(embedding):
+    return not np.any(embedding)
+
+
+def normalize_vector(vector):
+    assert not is_zero_embedding(vector), "Zero vector found!"
+    norm = np.linalg.norm(vector)
+    return (vector / norm).astype(np.float32)

@@ -9,6 +9,7 @@ import gc
 import math
 import numpy as np
 from pylibraft.neighbors.brute_force import knn
+from cuvs.neighbors import brute_force
 import rmm
 from rich import print as rprint
 from rich.markdown import Markdown
@@ -66,21 +67,21 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
 
     total_gpu_memory = nvidia_smi.nvmlDeviceGetMemoryInfo(handle).total
 
-    print("Total memory:", total_gpu_memory)
+    print("-- total memory:", total_gpu_memory)
 
     nvidia_smi.nvmlShutdown()
 
     # Measure GPU memory usage after converting to cuDF dataframe
     memory_used = df.memory_usage().sum()
-    print(f"memory_used {memory_used}")
+    print(f"-- memory_used {memory_used}")
     factor = math.ceil((total_gpu_memory * .2) / memory_used)
-    print(f"factor {factor}")
+    print(f"-- factor {factor}")
     batch_size *= factor  # or any other increment factor you find suitable
 
     while True:
         try:
             if num_rows < batch_size:
-                print(f"The calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
+                print(f"-- the he calculated batch size {batch_size} is bigger than total rows {num_rows}. Use total rows as the target batch size!")
                 batch_size = num_rows
                 break 
 
@@ -95,21 +96,22 @@ def tune_memory(table, batch_size, max_memory_threshold, rmm):
                 # If the memory used goes beyond the threshold, break and set the batch size
                 # to the last successful size.
                 batch_size = int(0.8 * batch_size)
-                print(f"found threshold {batch_size}")
+                print(f"-- found threshold {batch_size}")
                 break
             else:
-                print(f"memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
+                print(f"-- memory used {memory_used}, ratio {memory_used / total_gpu_memory}, batch_size {batch_size}")
                 batch_size *= 1.2
 
         except Exception as e:
             batch_size = int(0.8 * batch_size)
-            print(f"exception {e}, max batch size {batch_size}")
+            print(f"-- exception {e}, max batch size {batch_size}")
             break
 
     return batch_size
 
 
 def load_table(data_dir, filename, start, end):
+    # If needed, add "thrift_string_size_limit=1000000000" option to avoid the error of exceeding the thrift string size limit
     return pq.read_table(get_full_filename(data_dir,filename)).slice(start, end)
 
 
@@ -139,7 +141,6 @@ def prep_table(data_dir, filename, count, n):
 
 
 def compute_knn(data_dir,
-                model_name,
                 dimensions,
                 query_filename,
                 query_count,
@@ -150,8 +151,6 @@ def compute_knn(data_dir,
                 initial_batch_size=100000,
                 max_memory_threshold=0.1,
                 split=True):
-    model_prefix = get_model_prefix(model_name)
-
     rmm.mr.set_current_device_resource(rmm.mr.PoolMemoryResource(rmm.mr.ManagedMemoryResource()))
 
     batch_size = initial_batch_size
@@ -165,9 +164,10 @@ def compute_knn(data_dir,
         batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)
 
     batch_count = math.ceil(len(base_table) / batch_size)
-    assert(len(base_table) % batch_size == 0) or k <= (len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
+    assert (len(base_table) % batch_size == 0) or k <= (len(base_table) % batch_size), \
+        f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
-    process_batches(data_dir, model_prefix, dimensions, base_table, query_table, batch_count, batch_size, k, split)
+    process_batches(base_table, query_table, batch_count, batch_size, k, split)
 
 
 def cleanup(*args):
@@ -180,23 +180,21 @@ def cleanup(*args):
     rmm.reinitialize(pool_allocator=False)
 
 
-def process_batches(data_dir, 
-                    model_prefix,
-                    output_dimension,
-                    base_table, 
+def process_batches(base_table,
                     query_table, 
                     batch_count, 
                     batch_size, 
                     k, 
-                    split):
+                    split,
+                    engine='raft'):
     for start in tqdm(range(0, batch_count)):
         batch_offset = start * batch_size
         batch_length = batch_size if start != batch_count - 1 else len(base_table) - batch_offset
+
         dataset_batch = base_table.slice(batch_offset, batch_length)
-
         df = cudf.DataFrame.from_arrow(dataset_batch)
-        df_numeric = df.select_dtypes(['float32', 'float64'])
 
+        df_numeric = df.select_dtypes(['float32', 'float64'])
         cleanup(df)
 
         dataset = cp.from_dlpack(df_numeric.to_dlpack()).copy(order='C')
@@ -210,45 +208,76 @@ def process_batches(data_dir,
 
         distances = cudf.DataFrame()
         indices = cudf.DataFrame()
-        if split:
-            for i in tqdm(range(splits)):
-                offset = i * rows_per_split
-                length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
+        if not split:
+            splits = 1
 
-                query_batch = query_table.slice(offset, length)
+        for i in tqdm(range(splits)):
+            offset = i * rows_per_split
+            length = rows_per_split if i != splits - 1 else len(query_table) - offset  # To handle the last chunk
 
-                df1 = cudf.DataFrame.from_arrow(query_batch)
-                df_numeric1 = df1.select_dtypes(['float32', 'float64'])
+            query_batch = query_table.slice(offset, length)
 
-                cleanup(df1)
-                query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
+            df1 = cudf.DataFrame.from_arrow(query_batch)
+            df_numeric1 = df1.select_dtypes(['float32', 'float64'])
 
-                assert (k <= len(dataset))
+            cleanup(df1)
+            query = cp.from_dlpack(df_numeric1.to_dlpack()).copy(order='C')
 
-                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32), 
-                                                   query.astype(np.float32), 
-                                                   k)
+            assert (k <= len(dataset))
 
-                distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
-                # add batch_offset to indices
-                indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+            print(f"Dataset shape: {dataset.shape}, Query shape: {query.shape}")
+            cupydistances1 = None
+            cupyindices1 = None
+            if engine == 'raft':
+                cupydistances1, cupyindices1 = knn(dataset.astype(np.float32),
+                                                    query.astype(np.float32),
+                                                    k)
+            elif engine == 'cuvs':
+                brute_force_index = brute_force.build(dataset, metric="cosine")
+                cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
+            elif engine == 'torch':
+                import torch
+                from torch.utils.dlpack import from_dlpack, to_dlpack
+                torch.device("cuda")
+                query_tensor = from_dlpack(query.toDlpack())
+                dataset_tensor = from_dlpack(dataset.toDlpack())
 
-                distances = cudf.concat([distances, distances1], ignore_index=True)
-                indices = cudf.concat([indices, indices1], ignore_index=True)
+                distance_batch = 1 - torch.matmul(query_tensor, dataset_tensor.T)
+                distances_tensor, indices_tensor = torch.topk(distance_batch, k, dim=1, largest=False)
 
-            distances.columns = distances.columns.astype(str)
-            indices.columns = indices.columns.astype(str)
-        
+                cupydistances1 = cp.from_dlpack(distances_tensor)
+                cupyindices1 = cp.from_dlpack(indices_tensor)
+
+                cleanup(distance_batch, distances_tensor, indices_tensor)
+
+            #brute_force_index = brute_force.build(dataset.astype(np.float32), metric="cosine")
+            #brute_force_index = brute_force.build(dataset, metric="cosine")
+            #cp.cuda.Stream.null.synchronize()  # Synchronize after building the index
+            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query.astype(np.float32), k)
+            #cupydistances1, cupyindices1= brute_force.search(brute_force_index, query, k)
+            #cp.cuda.Stream.null.synchronize()  # Synchronize after search
+
+            distances1 = cudf.from_pandas(pd.DataFrame(cp.asarray(cupydistances1).get()))
+            # add batch_offset to indices
+            indices1 = cudf.from_pandas(pd.DataFrame((cp.asarray(cupyindices1) + batch_offset).get()))
+
+            distances = cudf.concat([distances, distances1], ignore_index=True)
+            indices = cudf.concat([indices, indices1], ignore_index=True)
+
+        distances.columns = distances.columns.astype(str)
+        indices.columns = indices.columns.astype(str)
+
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        distances['RowNum'] = range(0, len(distances))
-        indices['RowNum'] = range(0, len(indices))
-
-        stream_cudf_to_parquet(distances, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_distances{start}.parquet')
-        stream_cudf_to_parquet(indices, 100000, f'{data_dir}/{model_prefix}_{output_dimension}_indices{start}.parquet')
+        stream_cudf_to_parquet(distances, 100000, f'distances{start}.parquet')
+        stream_cudf_to_parquet(indices, 100000, f'indices{start}.parquet')
 
         cleanup(df_numeric, distances, indices, dataset)
+
+    # print("completed processing batches")
+    # print("final distances shape: ", distances.shape)
+    # print("final indices shape: ", indices.shape)
 
 
 if __name__ == "__main__":

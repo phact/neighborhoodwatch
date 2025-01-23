@@ -13,12 +13,12 @@ from tqdm import tqdm
 from neighborhoodwatch.nw_utils import *
 
 
-def get_file_count(data_dir, model_prefix, dimensions):
-    str_pattern = r"" + data_dir + "/" + model_prefix + "_" + str(dimensions) + "_indices(\d+)\.parquet"
+def get_file_count(data_dir):
+    str_pattern = f"{data_dir}/indices(\d+)\.parquet"
     pattern = re.compile(str_pattern)
     file_count = 0
 
-    files = sorted(glob.glob(f"{data_dir}/{model_prefix}_{dimensions}_indices*.parquet"))
+    files = sorted(glob.glob(f"{data_dir}/indices*.parquet"))
     for filename in files:
         match = pattern.match(filename)
         if match:
@@ -28,19 +28,19 @@ def get_file_count(data_dir, model_prefix, dimensions):
     return file_count
 
 
-def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
-    model_prefix = get_model_prefix(model_name)
+def merge_indices_and_distances(data_dir):
+    file_count = get_file_count(data_dir)
 
-    file_count = get_file_count(data_dir, model_prefix, output_dimension)
     if file_count > 0:
-        indices_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_indices0.parquet")
-        distances_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_distances0.parquet")
+        indices_table = pq.read_table(f"{data_dir}/indices0.parquet")
+        distances_table = pq.read_table(f"{data_dir}/distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
+
         batch_count = math.ceil(len(indices_table) / batch_size)
 
-        final_indices_filename = f"{data_dir}/{model_prefix}_{output_dimension}_final_indices.parquet"
-        final_distances_filename = f"{data_dir}/{model_prefix}_{output_dimension}_final_distances.parquet"
+        final_indices_filename = f'{data_dir}/final_indices.parquet'
+        final_distances_filename = f'{data_dir}/final_distances.parquet'
 
         final_indices_writer = pq.ParquetWriter(final_indices_filename, indices_table.schema)
         final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
@@ -51,8 +51,8 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
             final_distances = pd.DataFrame()
 
             for i in range(file_count):
-                indices_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_indices{i}.parquet")
-                distances_table = pq.read_table(f"{data_dir}/{model_prefix}_{output_dimension}_distances{i}.parquet")
+                indices_table = pq.read_table(f"{data_dir}/indices{i}.parquet")
+                distances_table = pq.read_table(f"{data_dir}/distances{i}.parquet")
 
                 rownum_index = indices_table.schema.get_field_index('RowNum')
                 indices_table = indices_table.remove_column(rownum_index)
@@ -71,6 +71,7 @@ def merge_indices_and_distances(data_dir, model_name, output_dimension, k=100):
                     final_indices = indices_batch
                     final_distances = distances_batch
                 else:
+
                     # Concatenate the distances and indices along the column axis (axis=1)
                     concatenated_distances = pd.concat([final_distances, distances_batch], axis=1)
                     concatenated_indices = pd.concat([final_indices, indices_batch], axis=1)

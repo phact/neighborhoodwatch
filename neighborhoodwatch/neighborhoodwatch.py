@@ -1,7 +1,9 @@
 import argparse
 
 from neighborhoodwatch.generate_dataset import generate_query_dataset, generate_base_dataset
-from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file, validate_files
+from neighborhoodwatch.model_generator import get_valid_model_names_string, get_effective_embedding_size, \
+    is_valid_model_name
+from neighborhoodwatch.parquet_to_format import generate_output_files, validate_files
 from neighborhoodwatch.merge import merge_indices_and_distances
 from neighborhoodwatch.cu_knn import compute_knn
 from neighborhoodwatch.cu_knn_ds import compute_knn_ds
@@ -39,14 +41,14 @@ Some example commands:\n
     parser.add_argument('query_count', type=int, help="number of query vectors to generate")
     parser.add_argument('base_count', type=int, help="number of base vectors to generate")
     parser.add_argument('-m', '--model_name', type=str,
-                        help='model name to use for generating embeddings, i.e. text-embedding-ada-002, textembedding-gecko, or intfloat/e5-large-v2')
-    parser.add_argument('-d', '--dimension_size', type=int,
-                        help='Output dimension size. Only supported in OpenAI text-embedding-3-xxx models (reduced dimension size). Ignored otherwise.')
+                        help=f'model name to use for generating embeddings and must be one of: {get_valid_model_names_string()}')
+    parser.add_argument('-ods', '--output_dimension_size', type=int, default=None,
+                        help="Output dimension size; can be different from model's default dimension size!")
+    parser.add_argument('-odt', '--output_dtype', type=str, default='float',
+                        help="Output dtype; currently only valid for VoyageAI model!")
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('--data_dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
-    parser.add_argument('--skip-zero-vec', action=argparse.BooleanOptionalAction, default=True,
-                        help='Skip generating zero vectors when failing to retrieve the embedding (default: True)')
     parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=False,
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True,
@@ -63,23 +65,16 @@ Some example commands:\n
         rprint(Markdown(f"The specified wikipedia dataset configuration/subset does not exist: {BASE_CONFIG}"))
         sys.exit(1)
 
-    try:
-        output_dimension = get_embedding_size(args.model_name, args.dimension_size)
-    except:
-        rprint(Markdown(
-            f"Unsupported model name ({args.model_name}) or can't determine the dimension size for it. "
-            f"Please double check the input model name!"))
-        sys.exit(2)
-
     rprint('', Markdown(f"""**Neighborhood Watch** is generating brute force neighbors based on the wikipedia dataset with the following specification:\n
 --- dataset/model specification ---\n
 * source dataset version: `{BASE_DATASET}-{BASE_CONFIG}`\n
 * query count: `{args.query_count}`\n
 * base vector count: `{args.base_count}`\n
 * model name: `{args.model_name}`\n
-* output dimension size: `{output_dimension} (Only relevant with OpenAI latest embedding models: text-embedding-3-small/large`\n
+* output dimension size: `{args.output_dimension_size}`\n
+* output dtype: `{args.output_dtype}` (currently only relevant for VoyageAI models)\n
+* K: `{args.k}`\n
 --- behavior specification ---\n
-* skip zero vector: `{args.skip_zero_vec}`\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
 * post validation: `{args.post_validation}`\n
@@ -87,16 +82,28 @@ Some example commands:\n
 """))
     rprint('', Markdown("---"))
 
-    if not os.path.exists(args.data_dir):
+    assert is_valid_model_name(args.model_name), \
+        f"The given model name is invalid; must be one of: {get_valid_model_names_string()}"
+
+    model_prefix = get_model_prefix(args.model_name)
+
+    data_dir = f"{args.data_dir}/{model_prefix}/q{args.query_count}_b{args.base_count}_k{args.k}"
+    if not os.path.exists(data_dir):
         os.makedirs(args.data_dir)
 
-    rprint(Markdown("**Generating query dataset** "), '')
+    output_dimension = get_effective_embedding_size(args.model_name, args.output_dimension_size)
+    output_dtype = None
+    if args.model_name.startswith('voyage'):
+        output_dtype = args.output_dtype
+        assert output_dtype in ['float', 'int8', 'uint8', 'binary', 'ubinary']
+
+    rprint(Markdown("**Generating query dataset ......** "), '')
     section_time = time.time()
     query_filename = generate_query_dataset(args.data_dir,
                                             args.query_count,
                                             args.model_name,
                                             output_dimension,
-                                            args.skip_zero_vec)
+                                            output_dtype)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -108,17 +115,17 @@ Some example commands:\n
                                           args.base_count,
                                           args.model_name,
                                           output_dimension,
-                                          args.skip_zero_vec)
+                                          output_dtype)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
     cleanup_partial_parquet()
 
-    rprint(Markdown("**Computing knn** "), '')
+    rprint(Markdown("**Computing knn ......** "), '')
     section_time = time.time()
     if args.use_dataset_api:
-        compute_knn_ds(args.data_dir,
+        compute_knn_ds(data_dir,
                        args.model_name,
                        output_dimension,
                        query_filename,
@@ -143,10 +150,7 @@ Some example commands:\n
 
     rprint(Markdown("**Merging indices and distances** "), '')
     section_time = time.time()
-    merge_indices_and_distances(args.data_dir,
-                                args.model_name,
-                                output_dimension,
-                                args.k)
+    merge_indices_and_distances(args.data_dir)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -156,36 +160,20 @@ Some example commands:\n
     rprint(Markdown("**Generating ivec's and fvec's** "), '')
     section_time = time.time()
     query_vector_fvec, indices_ivec, distances_fvec, base_vector_fvec = \
-        generate_ivec_fvec_files(args.data_dir,
-                                 args.model_name,
-                                 output_dimension,
-                                 f"{model_prefix}_{output_dimension}_final_indices.parquet",
-                                 base_filename,
-                                 query_filename,
-                                 f"{model_prefix}_{output_dimension}_final_distances.parquet",
-                                 args.base_count,
-                                 args.query_count,
-                                 args.k)
+        generate_output_files(args.data_dir,
+                              model_prefix,
+                              output_dimension,
+                              f"final_indices.parquet",
+                              base_filename,
+                              query_filename,
+                              f"final_distances.parquet",
+                              args.base_count,
+                              args.query_count,
+                              args.k,
+                              args.gen_hdf5)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
-
-    if args.gen_hdf5:
-        rprint(Markdown("**Generating hdf5** "), '')
-        section_time = time.time()
-        generate_hdf5_file(args.data_dir,
-                           args.model_name,
-                           output_dimension,
-                           f"{model_prefix}_{output_dimension}_final_indices.parquet",
-                           base_filename,
-                           query_filename,
-                           f"{model_prefix}_{output_dimension}_final_distances.parquet",
-                           args.base_count,
-                           args.query_count,
-                           args.k)
-        rprint(Markdown(
-            f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
-        rprint(Markdown("---"), '')
 
     if args.post_validation:
         yes_no_str = input(
