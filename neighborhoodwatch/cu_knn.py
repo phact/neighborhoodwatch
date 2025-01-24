@@ -44,7 +44,7 @@ def stream_cudf_to_parquet(filename, df, chunk_size):
         table_chunk = cudf.DataFrame.to_arrow(df_chunk)
 
         if writer is None:
-            writer = pq.ParquetWriter(f"{filename}", table_chunk.schema)
+            writer = pq.ParquetWriter(filename, table_chunk.schema)
 
         writer.write_table(table_chunk)
 
