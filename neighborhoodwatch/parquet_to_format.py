@@ -1,5 +1,4 @@
-import sys
-import cupy as cp
+import os
 import cupy as cp
 import h5py
 import numpy as np
@@ -8,8 +7,7 @@ from tqdm import tqdm
 from rich import print as rprint
 from rich.markdown import Markdown
 import struct
-import os
-from neighborhoodwatch.nw_utils import *
+from neighborhoodwatch.nw_utils import get_full_filename
 
 from cuvs.distance import pairwise_distance
 from cuvs.neighbors import brute_force
