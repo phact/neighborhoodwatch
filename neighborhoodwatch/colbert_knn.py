@@ -31,7 +31,7 @@ pa.jemalloc_set_decay_ms(0)
 def process_source_dataset(streamer,
                            generator,
                            dataset,
-                           input_dimensions,
+                           input_dimensionss,
                            token_count,
                            column_to_embed,
                            logger=None):
@@ -59,8 +59,8 @@ def process_source_dataset(streamer,
                 continue
 
             # split the embeddings into token embeddings
-            token_embeddings = [embeddings[j][i * input_dimensions:(i + 1) * input_dimensions] for i in
-                                range(len(embeddings[j]) // input_dimensions)]
+            token_embeddings = [embeddings[j][i * input_dimensionss:(i + 1) * input_dimensionss] for i in
+                                range(len(embeddings[j]) // input_dimensionss)]
             for token_embedding in token_embeddings:
                 processed_token_embedding_cnt += 1
                 token_embedding_array.append(token_embedding)
@@ -154,8 +154,8 @@ Some example commands:\n
         """, formatter_class=KeepLineBreaksFormatter)
     parser.add_argument('query_token_count', type=int, help="number of query token vectors to generate")
     parser.add_argument('base_token_count', type=int, help="number of base token vectors to generate")
-    parser.add_argument('-m', '--model_name', type=str, default="colbert-v2.0",
-                        help='Colbert model name (default: colbert-v2.0)')
+    parser.add_argument('-m', '--model_name', type=str, default="colbertv2.0",
+                        help='Colbert model name (default: colbertv2.0)')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('-es', '--embedding-scale', type=str, default="medium",
                         help='Embedding scale. Options: small (10000), medium(100000), large (1000000) (default: medium)')
@@ -197,7 +197,7 @@ Some example commands:\n
 
     model_prefix = get_model_prefix(args.model_name)
     data_dir = setup_model_output_folder(args.data_dir, args.model_name, args.query_token_count, args.base_token_count, args.k)
-    input_dimension = get_effective_embedding_size(args.model_name)
+    input_dimensions = get_effective_embedding_size(args.model_name)
 
     if args.embedding_scale is None or args.embedding_scale == "medium":
         embedding_chunk_size = 100000
@@ -226,10 +226,10 @@ Some example commands:\n
     section_time = time.time()
     src_query_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
 
-    token_embed_columns = [f'token_embedding_{i}' for i in range(input_dimension)]
+    token_embed_columns = [f'token_embedding_{i}' for i in range(input_dimensions)]
 
     query_embed_token_filename = get_full_filename(data_dir,
-                                                   f"{model_prefix}_{input_dimension}_query_token{args.query_token_count}_src.parquet")
+                                                   f"{model_prefix}_{input_dimensions}_query_token{args.query_token_count}_src.parquet")
     query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
     query_print_info = True
     if not os.path.exists(query_embed_token_filename):
@@ -238,7 +238,7 @@ Some example commands:\n
             process_source_dataset(query_embed_streamer,
                                    token_generator,
                                    src_query_dataset,
-                                   input_dimension,
+                                   input_dimensions,
                                    args.query_token_count,
                                    "question",
                                    logger=logger))
@@ -260,7 +260,7 @@ Some example commands:\n
                                              split='train')
 
     base_embed_token_filename = get_full_filename(data_dir,
-                                                  f"{model_prefix}_{input_dimension}_base_token{args.base_token_count}_src.parquet")
+                                                  f"{model_prefix}_{input_dimensions}_base_token{args.base_token_count}_src.parquet")
     base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
     base_print_info = True
     if not os.path.exists(base_embed_token_filename):
@@ -269,7 +269,7 @@ Some example commands:\n
             process_source_dataset(base_embed_streamer,
                                    token_generator,
                                    src_base_dataset,
-                                   input_dimension,
+                                   input_dimensions,
                                    args.base_token_count,
                                    "text",
                                    logger=logger))
@@ -327,7 +327,7 @@ Some example commands:\n
     section_time = time.time()
     generate_output_files(data_dir,
                           model_prefix,
-                          input_dimension,
+                          input_dimensions,
                           base_embed_token_filename,
                           query_embed_token_filename,
                           args.base_token_count,
