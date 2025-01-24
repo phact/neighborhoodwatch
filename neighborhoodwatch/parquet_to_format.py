@@ -112,8 +112,9 @@ def generate_query_vectors_fvec(data_dir,
                                 dimensions,
                                 query_vectors_fvec_file,
                                 output_hdf5=True,
+                                column_names=None,
                                 hdf5_file=None):
-    df = read_and_extract(data_dir, input_parquet, query_count, dimensions)
+    df = read_and_extract(data_dir, input_parquet, query_count, dimensions, column_names)
 
     if is_empty_file(query_vectors_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, query_vectors_fvec_file, df, 'f', dimensions)
@@ -129,9 +130,9 @@ def generate_base_vectors_fvec(data_dir,
                                input_parquet,
                                base_count,
                                dimensions,
-                               column_names,
                                base_vectors_fvec_file,
                                output_hdf5=True,
+                               column_names=None,
                                hdf5_file=None):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions, column_names)
 
@@ -217,6 +218,7 @@ def generate_output_files(data_dir,
                                 dimensions,
                                 query_vector_fvec_file,
                                 output_hdf5,
+                                column_names,
                                 hdf5_filename)
     rprint(Markdown(f"*`{query_vector_fvec_file}`* - "
                     f"query vector count: `{count_vectors(data_dir, query_vector_fvec_file)}`, "
@@ -227,9 +229,9 @@ def generate_output_files(data_dir,
                                base_vectors_parquet,
                                base_count,
                                dimensions,
-                               column_names,
                                base_vector_fvec_file,
                                output_hdf5,
+                               column_names,
                                hdf5_filename)
     rprint(Markdown(f"*`{base_vector_fvec_file}`* - "
                     f"base vector count: `{count_vectors(data_dir, base_vector_fvec_file)}`, "

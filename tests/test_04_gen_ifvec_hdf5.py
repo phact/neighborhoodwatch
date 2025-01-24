@@ -7,7 +7,7 @@ import pyarrow.parquet as pq
 from neighborhoodwatch.parquet_to_format import \
     generate_query_vectors_fvec, generate_indices_ivec, \
     generate_base_vectors_fvec, generate_distances_fvec, \
-    count_vectors, get_nth_vector, dot_product, generate_hdf5_file, generate_ivec_fvec_files
+    count_vectors, get_nth_vector, dot_product, generate_output_files
 from neighborhoodwatch.nw_utils import normalize_vector
 
 import tests.conftest as test_settings
@@ -181,27 +181,18 @@ def test_generate_hdf5():
     test_generate_base_vectors_fvec()
 
     query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
-        generate_ivec_fvec_files(test_settings.test_dataset_dir,
-                                 dummy_model_name,
-                                 dimensions,
-                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_base_vectors.parquet",
-                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_query_vectors.parquet",
-                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_indices.parquet",
-                                 f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_distances.parquet",
-                                 base_count,
-                                 query_count,
-                                 k)
-
-    generate_hdf5_file(test_settings.test_dataset_dir,
-                       dummy_model_name,
-                       dimensions,
-                       base_df_hdf5,
-                       query_df_hdf5,
-                       f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_indices.parquet",
-                       f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_distances.parquet",
-                       base_count,
-                       query_count,
-                       k)
+        generate_output_files(test_settings.test_dataset_dir,
+                              dummy_model_name,
+                              dimensions,
+                              f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_base_vectors.parquet",
+                              f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_query_vectors.parquet",
+                              f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_indices.parquet",
+                              f"{test_settings.test_dataset_dir}/{dummy_model_name}_{dimensions}_final_distances.parquet",
+                              base_count,
+                              query_count,
+                              k,
+                              output_hdf5=True,
+                              output_dtype=None)
     hdf5_filename = f"{dummy_model_name}_{dimensions}_base_{base_count}_query_{query_count}_k{k}.hdf5"
     assert os.path.exists(f"{test_settings.test_dataset_dir}/{hdf5_filename}")
 

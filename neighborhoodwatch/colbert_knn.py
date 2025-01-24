@@ -1,5 +1,6 @@
 import argparse
 import datasets
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import os
@@ -28,54 +29,54 @@ pa.jemalloc_set_decay_ms(0)
 
 
 def process_source_dataset(streamer,
+                           generator,
                            dataset,
                            input_dimensions,
                            token_count,
-                           embedding_chunk_size,
                            column_to_embed,
                            logger=None):
+    assert isinstance(generator, ColbertPreTrainedEmbeddingGenerator)
 
     processed_token_embedding_cnt = 0
     detected_zero_text_embedding_cnt = 0
     total_sentence_cnt = 0
 
-    embedding_array = []
-
-    generator = ColbertPreTrainedEmbeddingGenerator(chunk_size=embedding_chunk_size)
+    token_embedding_array = []
 
     # TODO: Batch this  for better perf
     for cur_row, row in enumerate(dataset, start=1):  # Using enumerate to track current row
         sentence_list = split_into_sentences(row[column_to_embed])
 
-        embeddings = generator.generate_embedding(sentence_list)
+        #embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map([[cur_row, sentence_list]], generator)
+        embeddings, counts = generator.generate_embedding(sentence_list)
 
         embeddings_length = len(embeddings)
+        #embeddings_length = 1
 
         for j in range(embeddings_length):
+            if np.all(embeddings[j] == 0):
+                detected_zero_text_embedding_cnt += 1
+                continue
 
             # split the embeddings into token embeddings
             token_embeddings = [embeddings[j][i * input_dimensions:(i + 1) * input_dimensions] for i in
                                 range(len(embeddings[j]) // input_dimensions)]
-
             for token_embedding in token_embeddings:
                 processed_token_embedding_cnt += 1
-                if is_zero_embedding(token_embedding):
-                    detected_zero_text_embedding_cnt += 1
-                    continue
-
-                embedding_array.append(token_embedding)  # Directly extending the list
+                token_embedding_array.append(token_embedding)
                 if processed_token_embedding_cnt >= token_count:
                     break  # Early exit if token count is reached
+
             total_sentence_cnt += 1
 
         if processed_token_embedding_cnt >= token_count:
             break  # Early exit if token count is reached
 
-    if embedding_array:
+    if token_embedding_array:
         if logger is not None:
             logger.info(f"[final] processed_token_embedding_cnt: {processed_token_embedding_cnt}")
-        streamer.stream_to_parquet_without_src_metadata(embedding_array)
-        embedding_array.clear()
+        streamer.stream_to_parquet_without_src_metadata(token_embedding_array)
+        # token_embedding_array.clear()
 
     return cur_row, total_sentence_cnt, processed_token_embedding_cnt, detected_zero_text_embedding_cnt
 
@@ -196,7 +197,7 @@ Some example commands:\n
 
     model_prefix = get_model_prefix(args.model_name)
     data_dir = setup_model_output_folder(args.data_dir, args.model_name, args.query_token_count, args.base_token_count, args.k)
-    output_dimension = get_effective_embedding_size(args.model_name)
+    input_dimension = get_effective_embedding_size(args.model_name)
 
     if args.embedding_scale is None or args.embedding_scale == "medium":
         embedding_chunk_size = 100000
@@ -207,6 +208,8 @@ Some example commands:\n
     else:
         rprint(Markdown(f"Invalid embedding scale: {args.embedding_scale}"))
         sys.exit(1)
+
+    token_generator = ColbertPreTrainedEmbeddingGenerator(chunk_size=embedding_chunk_size)
 
     logging.basicConfig(
         level=logging.INFO,
@@ -223,21 +226,20 @@ Some example commands:\n
     section_time = time.time()
     src_query_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
 
-    token_embed_columns = [f'token_embedding_{i}' for i in range(output_dimension)]
+    token_embed_columns = [f'token_embedding_{i}' for i in range(input_dimension)]
 
     query_embed_token_filename = get_full_filename(data_dir,
-                                                   f"{model_prefix}_{output_dimension}_query_token{args.query_token_count}_src.parquet")
-
+                                                   f"{model_prefix}_{input_dimension}_query_token{args.query_token_count}_src.parquet")
     query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
     query_print_info = True
     if not os.path.exists(query_embed_token_filename):
         (query_row_cnt, query_sentence_cnt, query_embed_cnt_token,
          query_detected0cnt) = (
             process_source_dataset(query_embed_streamer,
+                                   token_generator,
                                    src_query_dataset,
-                                   output_dimension,
+                                   input_dimension,
                                    args.query_token_count,
-                                   embedding_chunk_size,
                                    "question",
                                    logger=logger))
     else:
@@ -258,17 +260,17 @@ Some example commands:\n
                                              split='train')
 
     base_embed_token_filename = get_full_filename(data_dir,
-                                                  f"{model_prefix}_{output_dimension}_base_token{args.base_token_count}_src.parquet")
+                                                  f"{model_prefix}_{input_dimension}_base_token{args.base_token_count}_src.parquet")
     base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
     base_print_info = True
     if not os.path.exists(base_embed_token_filename):
         (base_row_cnt, base_sentence_cnt, base_embed_cnt_token,
          base_detected0cnt) = (
             process_source_dataset(base_embed_streamer,
+                                   token_generator,
                                    src_base_dataset,
-                                   output_dimension,
+                                   input_dimension,
                                    args.base_token_count,
-                                   embedding_chunk_size,
                                    "text",
                                    logger=logger))
     else:
@@ -323,19 +325,18 @@ Some example commands:\n
     rprint(Markdown("---"), '')
     rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
-    query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
-        generate_output_files(data_dir,
-                              model_prefix,
-                              output_dimension,
-                              base_embed_token_filename,
-                              query_embed_token_filename,
-                              args.base_token_count,
-                              args.query_token_count,
-                              get_partial_indices_filename(data_dir, -1),
-                              get_partial_distances_filename(data_dir, -1),
-                              args.k,
-                              args.gen_hdf5,
-                              token_embed_columns)
+    generate_output_files(data_dir,
+                          model_prefix,
+                          input_dimension,
+                          base_embed_token_filename,
+                          query_embed_token_filename,
+                          args.base_token_count,
+                          args.query_token_count,
+                          get_partial_indices_filename(data_dir, -1),
+                          get_partial_distances_filename(data_dir, -1),
+                          args.k,
+                          args.gen_hdf5,
+                          token_embed_columns)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 

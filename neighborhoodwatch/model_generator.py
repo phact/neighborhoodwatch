@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
+from typing_extensions import override
 from vertexai.preview.language_models import TextEmbeddingModel
 from colbert.infra.config import ColBERTConfig
 from colbert.modeling.checkpoint import Checkpoint
@@ -393,7 +394,7 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
                  model_name=EmbeddingModelName.COLBERT_V2.value,
                  download_pretrained_model=False,
                  chunk_size=300000):
-        super().__init__(model_name, 128, chunk_size)
+        super().__init__(model_name, chunk_size=chunk_size, output_dimension=128)
 
         self.local_model_base_dir = f".pretrained"
         Path(self.local_model_base_dir).mkdir(parents=True, exist_ok=True)
@@ -425,7 +426,11 @@ class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
             print("   ** failed to download the model", e)
             raise RuntimeError(e)
 
-    def _call_model_api(self, text, *args, **kwargs):
+    def _call_model_api(self, text: list, *args, **kwargs):
+        pass
+
+    @override
+    def generate_embedding(self, text, *args, **kwargs):
         embeddings = []
         tensor_embeddings, token_cnt = self.encoder.encode_passages(text)
         np_embed = Tensor.numpy(tensor_embeddings)
