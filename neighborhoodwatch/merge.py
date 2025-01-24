@@ -1,5 +1,4 @@
 import math
-
 import cudf
 import pandas as pd
 import pyarrow.parquet as pq
@@ -10,20 +9,15 @@ import numpy as np
 
 from tqdm import tqdm
 
-from neighborhoodwatch.nw_utils import *
+from neighborhoodwatch.nw_utils import get_partial_indices_filename, get_partial_distances_filename
 
 
-def get_file_count(data_dir, model_prefix, dimensions, output_dtype=None):
-    if output_dtype is not None:
-        str_pattern = r"" + data_dir + "/" + model_prefix + "_" + str(dimensions) + "_" + output_dtype + "_.+indices.+_(\d+)\.parquet"
-        files = sorted(glob.glob(f"{data_dir}/{model_prefix}_{dimensions}_{output_dtype}*_indices*.parquet"))
-    else:
-        str_pattern = r"" + data_dir + "/" + model_prefix + "_" + str(dimensions) + "_.+indices.+_(\d+)\.parquet"
-        files = sorted(glob.glob(f"{data_dir}/{model_prefix}_{dimensions}*_indices_*.parquet"))
-
+def get_file_count(data_dir):
+    str_pattern = f"{data_dir}/indices(\d+)\.parquet"
     pattern = re.compile(str_pattern)
     file_count = 0
 
+    files = sorted(glob.glob(f"{data_dir}/indices*.parquet"))
     for filename in files:
         match = pattern.match(filename)
         if match:
@@ -42,33 +36,26 @@ def read_ifvec_parquet_with_proper_schema(filename):
     return ifvec_table
 
 
-def merge_indices_and_distances(data_dir,
-                                model_prefix,
-                                input_dimension,
-                                final_indices_filename,
-                                final_distances_filename,
-                                k=100,
-                                output_dtype=None):
-    file_count = get_file_count(data_dir, model_prefix, input_dimension, output_dtype)
-    print(f"===> file_count: {file_count}")
+def merge_indices_and_distances(data_dir, k=100):
+    file_count = get_file_count(f"{data_dir}/partial")
 
     if file_count > 0:
-        indices_table = read_ifvec_parquet_with_proper_schema(final_indices_filename.replace(".parquet", f"_0.parquet"))
-        distances_table = read_ifvec_parquet_with_proper_schema(final_distances_filename.replace(".parquet", f"_0.parquet"))
+        indices_table = read_ifvec_parquet_with_proper_schema(get_partial_indices_filename(data_dir, 0))
+        distances_table = read_ifvec_parquet_with_proper_schema(get_partial_distances_filename(data_dir, 0))
 
         batch_size = min(10000000, len(indices_table))
         batch_count = math.ceil(len(indices_table) / batch_size)
 
-        final_indices_writer = pq.ParquetWriter(final_indices_filename, indices_table.schema)
-        final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
+        final_indices_writer = pq.ParquetWriter(get_partial_indices_filename(data_dir, -1), indices_table.schema)
+        final_distances_writer = pq.ParquetWriter(get_partial_distances_filename(data_dir, -1), distances_table.schema)
 
         for start in tqdm(range(0, batch_count)):
             final_indices = pd.DataFrame()
             final_distances = pd.DataFrame()
 
             for i in tqdm(range(file_count)):
-                indices_table = read_ifvec_parquet_with_proper_schema(final_indices_filename.replace(".parquet", f"_{i}.parquet"))
-                distances_table = read_ifvec_parquet_with_proper_schema(final_distances_filename.replace(".parquet", f"_{i}.parquet"))
+                indices_table = read_ifvec_parquet_with_proper_schema(get_partial_indices_filename(data_dir, i))
+                distances_table = read_ifvec_parquet_with_proper_schema(get_partial_distances_filename(data_dir, i))
 
                 if start != batch_count:
                     indices_batch = indices_table.slice(start, batch_size).to_pandas()
@@ -81,6 +68,7 @@ def merge_indices_and_distances(data_dir,
                     final_indices = indices_batch
                     final_distances = distances_batch
                 else:
+
                     # Concatenate the distances and indices along the column axis (axis=1)
                     concatenated_distances = pd.concat([final_distances, distances_batch], axis=1)
                     concatenated_indices = pd.concat([final_indices, indices_batch], axis=1)

@@ -1,7 +1,8 @@
+import os
 from collections import OrderedDict
 
-from datasets import get_dataset_config_names
 import numpy as np
+from datasets import get_dataset_config_names
 
 BASE_DATASET = "wikipedia"
 BASE_DATASET_LANG = "en"
@@ -11,16 +12,6 @@ BASE_CONFIG = f"{BASE_DATASET_VERSION}.{BASE_DATASET_LANG}"
 QUERY_DATASET = "squad"
 
 
-# TODO: add a check for the openai api key
-def check_openai_api_key():
-    pass
-
-
-# TODO: add a check for the gcp credentials
-def check_gcp_credentials():
-    pass
-
-
 # Check whether the dataset exists remotely
 def check_dataset_exists_remote():
     configs = get_dataset_config_names(BASE_DATASET, trust_remote_code=True)
@@ -28,69 +19,6 @@ def check_dataset_exists_remote():
         return True
     else:
         return False
-
-
-valid_names = ['text-embedding-ada-002',
-               'text-embedding-3-small',
-               'text-embedding-3-large',
-               'textembedding-gecko',
-               'text-multilingual-embedding',
-               'text-embedding-004',
-               'intfloat/e5-large-v2',
-               'intfloat/e5-base-v2',
-               'intfloat/e5-small-v2',
-               'colbertv2.0',
-               'nividia-nemo',
-               'cohere/embed-english-v3.0',
-               'cohere/embed-english-light-3.0',
-               'jinaai/jina-embeddings-v2-small-en',
-               'jinaai/jina-embeddings-v2-base-en',
-               'voyage-3-large',
-               'voyage-3-lite']
-
-
-# Programmatically get the embedding size from the model name
-# No need for manual input of the dimensions
-def get_embedding_size(model_name: str, output_dimension_size=None):
-    # OpenAI embedding models
-    if model_name == 'text-embedding-ada-002' or model_name == 'text-embedding-3-small':
-        default_model_dimension = 1536
-    elif model_name == 'text-embedding-3-large':
-        default_model_dimension = 3072
-    # VertexAI embedding models
-    elif model_name == 'textembedding-gecko' or model_name == 'text-multilingual-embedding' or model_name == 'text-embedding-004':
-        default_model_dimension = 768
-    # HuggingFace embedding models
-    elif model_name == 'intfloat/e5-large-v2':
-        default_model_dimension = 1024
-    elif model_name == 'intfloat/e5-base-v2':
-        default_model_dimension = 768
-    elif model_name == 'intfloat/e5-small-v2':
-        default_model_dimension = 384
-    # Colbert models
-    elif model_name == 'colbertv2.0':
-        default_model_dimension = 128
-    # Cohere models
-    elif model_name == 'cohere/embed-english-v3.0':
-        default_model_dimension = 1024
-    elif model_name == 'cohere/embed-english-light-3.0':
-        default_model_dimension = 384
-    elif model_name == 'voyage-3-large':
-        default_model_dimension = 1024
-    elif model_name == 'voyage-3-lite':
-        default_model_dimension = 512
-    else:
-        raise ValueError(f"Unsupported model_name: {model_name}")
-
-    if output_dimension_size is not None:
-        if model_name == 'text-embedding-3-small' or model_name == 'text-embedding-3-large':
-            assert (output_dimension_size <= default_model_dimension)
-            return output_dimension_size
-        elif model_name == 'voyage-3-large':
-            assert (output_dimension_size in [256, 512, 1024, 2048])
-            return output_dimension_size
-
-    return default_model_dimension
 
 
 def get_full_filename(data_dir, filename):
@@ -127,3 +55,51 @@ def normalize_vector(vector):
     assert not is_zero_embedding(vector), "Zero vector found!"
     norm = np.linalg.norm(vector)
     return (vector / norm).astype(np.float32)
+
+
+def get_model_data_homedir(output_homedir, model_name, query_count, base_count, k):
+    model_prefix = get_model_prefix(model_name)
+    return f"{output_homedir}/{model_prefix}/q{query_count}_b{base_count}_k{k}"
+
+
+def setup_model_output_folder(output_homedir, model_name, query_count, base_count, k):
+    data_dir = get_model_data_homedir(output_homedir, model_name, query_count, base_count, k)
+    partial_data_dir = f"{data_dir}/partial"
+    if not os.path.exists(partial_data_dir):
+        os.makedirs(partial_data_dir)
+
+    return data_dir
+
+
+def get_source_query_dataset_filename(knn_model_data_homedir, model_name, row_count, output_dimension=None, output_dtype=None):
+    if output_dtype is not None:
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_query_vector_data_{row_count}"
+    else:
+        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_query_vector_data_{row_count}"
+
+    return f'{knn_model_data_homedir}/{filename_base}.parquet'
+
+
+def get_source_base_dataset_filename(knn_model_data_homedir, model_name, row_count, output_dimension=None, output_dtype=None):
+        if output_dtype is not None:
+            filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_base_vector_data_{row_count}"
+        else:
+            filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_base_vector_data_{row_count}"
+
+        return f'{knn_model_data_homedir}/{filename_base}.parquet'
+
+
+def get_partial_indices_filename(knn_model_data_homedir: str, partial_set_cnt: int):
+    is_final = partial_set_cnt == -1
+    if is_final:
+        return f'{knn_model_data_homedir}/partial/final_indices.parquet'
+    else:
+        return f'{knn_model_data_homedir}/partial/indices{partial_set_cnt}.parquet'
+
+
+def get_partial_distances_filename(knn_model_data_homedir, partial_set_cnt:int):
+    is_final = partial_set_cnt == -1
+    if is_final:
+        return f'{knn_model_data_homedir}/partial/final_distances.parquet'
+    else:
+        return f'{knn_model_data_homedir}/partial/distances{partial_set_cnt}.parquet'

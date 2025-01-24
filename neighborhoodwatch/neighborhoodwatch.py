@@ -1,11 +1,14 @@
 import argparse
 
 from neighborhoodwatch.generate_dataset import generate_query_dataset, generate_base_dataset
-from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file, validate_files
+from neighborhoodwatch.model_generator import get_valid_model_names_string, get_effective_embedding_size, \
+    is_valid_model_name, EmbeddingModelName
+from neighborhoodwatch.parquet_to_format import generate_output_files, validate_files_v0, validate_files
 from neighborhoodwatch.merge import merge_indices_and_distances
 from neighborhoodwatch.cu_knn import compute_knn
 from neighborhoodwatch.cu_knn_ds import compute_knn_ds
-from neighborhoodwatch.nw_utils import *
+from neighborhoodwatch.nw_utils import check_dataset_exists_remote, BASE_DATASET, BASE_CONFIG, get_model_prefix, \
+    get_partial_indices_filename, get_partial_distances_filename, get_model_data_homedir, setup_model_output_folder
 
 import os
 import sys
@@ -14,10 +17,10 @@ from rich.markdown import Markdown
 import time
 
 
-def cleanup_partial_parquet():
-    for filename in os.listdir():
+def cleanup_partial_parquet(data_dir):
+    for filename in os.listdir(data_dir):
         if filename.startswith("distances") or filename.startswith("indices") or filename.startswith("final"):
-            os.remove(filename)
+            os.remove(f"{data_dir}/{filename}")
 
 
 class KeepLineBreaksFormatter(argparse.RawTextHelpFormatter):
@@ -39,16 +42,14 @@ Some example commands:\n
     parser.add_argument('query_count', type=int, help="number of query vectors to generate")
     parser.add_argument('base_count', type=int, help="number of base vectors to generate")
     parser.add_argument('-m', '--model_name', type=str,
-                        help='model name to use for generating embeddings, i.e. text-embedding-ada-002, textembedding-gecko, or intfloat/e5-large-v2')
-    parser.add_argument('-ods', '--output_dimension_size', type=int,
+                        help=f'model name to use for generating embeddings and must be one of: {get_valid_model_names_string()}')
+    parser.add_argument('-ods', '--output_dimension_size', type=int, default=None,
                         help="Output dimension size; can be different from model's default dimension size!")
     parser.add_argument('-odt', '--output_dtype', type=str, default='float',
                         help="Output dtype; currently only valid for VoyageAI model!")
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
-    parser.add_argument('--norm-embed', action=argparse.BooleanOptionalAction, default=False,
-                        help='Normalize the returned model embeddings (default: False)')
     parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=False,
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True,
@@ -74,7 +75,6 @@ Some example commands:\n
 * output dimension size: `{args.output_dimension_size}`\n
 * output dtype: `{args.output_dtype}` (currently only relevant for VoyageAI models)\n
 * K: `{args.k}`\n
-* normalize embeddings: `{args.norm_embed}`\n
 --- behavior specification ---\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
@@ -83,12 +83,20 @@ Some example commands:\n
 """))
     rprint('', Markdown("---"))
 
-    model_prefix = get_model_prefix(args.model_name)
-    data_dir = f"{args.data_dir}/{model_prefix}/q{args.query_count}_b{args.base_count}_k{args.k}"
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
+    assert is_valid_model_name(args.model_name), \
+        f"The given model name is invalid; must be one of: {get_valid_model_names_string()}"
 
-    output_dimension = get_embedding_size(args.model_name, args.output_dimension_size)
+    if args.model_name == EmbeddingModelName.COLBERT_V2.value:
+        raise f'For Colbert model, please use `ck` program by running `poetry run ck ...'
+
+    model_prefix = get_model_prefix(args.model_name)
+    data_dir = setup_model_output_folder(args.data_dir, 
+                                         args.model_name, 
+                                         args.query_count, 
+                                         args.base_count, 
+                                         args.k)
+    output_dimension = get_effective_embedding_size(args.model_name, args.output_dimension_size)
+
     output_dtype = None
     if args.model_name.startswith('voyage'):
         output_dtype = args.output_dtype
@@ -100,9 +108,8 @@ Some example commands:\n
                                             args.model_name,
                                             args.query_count,
                                             output_dimension,
-                                            args.norm_embed,
                                             output_dtype)
-
+    rprint(Markdown(f"(**Query source file**: `{query_filename}`)"))
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -114,30 +121,15 @@ Some example commands:\n
                                           query_filename,
                                           args.base_count,
                                           output_dimension,
-                                          args.norm_embed,
                                           output_dtype)
+    rprint(Markdown(f"(**Base source file**: `{base_filename}`)"))
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    cleanup_partial_parquet()
+    cleanup_partial_parquet(f"{data_dir}/partial")
 
     rprint(Markdown("**Computing knn ......** "), '')
-
-    if output_dtype is not None:
-        final_indecies_filename_base = f"{model_prefix}_{output_dimension}_{output_dtype}_final_indices_query{args.query_count}_k{args.k}"
-        final_distances_filename_base = f"{model_prefix}_{output_dimension}_{output_dtype}_final_distances_query{args.query_count}_k{args.k}"
-    else:
-        final_indecies_filename_base = f"{model_prefix}_{output_dimension}_final_indices_query{args.query_count}_k{args.k}"
-        final_distances_filename_base = f"{model_prefix}_{output_dimension}_final_distances_query{args.query_count}_k{args.k}"
-
-    if not args.norm_embed:
-        final_indecies_filename = get_full_filename(data_dir, f"{final_indecies_filename_base}.parquet")
-        final_distances_filename = get_full_filename(data_dir, f"{final_distances_filename_base}.parquet")
-    else:
-        final_indecies_filename = get_full_filename(data_dir, f"{final_indecies_filename_base}_normalized.parquet")
-        final_distances_filename = get_full_filename(data_dir, f"{final_distances_filename_base}_normalized.parquet")
-
     section_time = time.time()
     if args.use_dataset_api:
         compute_knn_ds(data_dir,
@@ -146,8 +138,6 @@ Some example commands:\n
                        args.query_count,
                        base_filename,
                        args.base_count,
-                       final_indecies_filename,
-                       final_distances_filename,
                        args.enable_memory_tuning,
                        args.k)
     else:
@@ -157,66 +147,36 @@ Some example commands:\n
                     args.query_count,
                     base_filename,
                     args.base_count,
-                    final_indecies_filename,
-                    final_distances_filename,
                     args.enable_memory_tuning,
-                    args.k,
-                    ignore_dimension_check=(model_prefix == 'voyage-3-large'))
+                    args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
     rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
-    merge_indices_and_distances(data_dir,
-                                model_prefix,
-                                output_dimension,
-                                final_indecies_filename,
-                                final_distances_filename,
-                                args.k,
-                                output_dtype)
+    merge_indices_and_distances(data_dir, k=args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
     rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
-    query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
-        generate_ivec_fvec_files(data_dir,
-                                 args.model_name,
-                                 output_dimension,
-                                 base_filename,
-                                 query_filename,
-                                 final_indecies_filename,
-                                 final_distances_filename,
-                                 args.base_count,
-                                 args.query_count,
-                                 args.k,
-                                 args.norm_embed,
-                                 column_names=None,
-                                 output_dtype=output_dtype)
+    query_vector_fvec, base_vector_fvec, indices_ivec, distances_fvec = \
+        generate_output_files(data_dir,
+                              model_prefix,
+                              output_dimension,
+                              base_filename,
+                              query_filename,
+                              args.base_count,
+                              args.query_count,
+                              get_partial_indices_filename(data_dir, -1),
+                              get_partial_distances_filename(data_dir, -1),
+                              args.k,
+                              args.gen_hdf5)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
-
-    if args.gen_hdf5:
-        rprint(Markdown("**Generating hdf5 ......** "), '')
-        section_time = time.time()
-        generate_hdf5_file(data_dir,
-                           model_prefix,
-                           output_dimension,
-                           base_df_hdf5,
-                           query_df_hdf5,
-                           final_indecies_filename,
-                           final_distances_filename,
-                           args.base_count,
-                           args.query_count,
-                           args.k,
-                           args.norm_embed,
-                           output_dtype)
-        rprint(Markdown(
-            f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
-        rprint(Markdown("---"), '')
 
     if args.post_validation:
         yes_no_str = input(
@@ -224,14 +184,16 @@ Some example commands:\n
         if yes_no_str == 'y' or yes_no_str == 'yes':
             rprint(Markdown("**Validating ivec's and fvec's ......** "), '')
             section_time = time.time()
-            validate_files(data_dir,
-                           query_vector_fvec,
-                           base_vector_fvec,
-                           indices_ivec,
-                           distances_fvec)
+
+            validate_files_v0(data_dir,
+                              query_vector_fvec,
+                              base_vector_fvec,
+                              indices_ivec,
+                              distances_fvec)
+
             rprint(Markdown(
                 f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
-            rprint(Markdown("---"), '')
+        rprint(Markdown("---"), '')
 
 
 if __name__ == "__main__":
