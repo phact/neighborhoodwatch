@@ -1,106 +1,38 @@
 import argparse
-import itertools
-from datetime import datetime
-
-import requests
 import datasets
-import tarfile
-import csv
-import cudf
-import cupy as cp
-from tqdm import tqdm
 import pyarrow as pa
-import pandas as pd
 import pyarrow.parquet as pq
 import os
 import sys
 import time
-import gc
 import math
-import numpy as np
-from pylibraft.neighbors.brute_force import knn
 import rmm
 import logging
 
-from pathlib import Path
-from torch import Tensor
-
-from neighborhoodwatch.cu_knn import tune_memory, process_batches
-from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
-     ParquetStreamer
-from neighborhoodwatch.merge import merge_indices_and_distances
-from neighborhoodwatch.model_generator import get_effective_embedding_size, EmbeddingModelName
-from neighborhoodwatch.neighborhoodwatch import KeepLineBreaksFormatter
-from neighborhoodwatch.nw_utils import *
+from datetime import datetime
 from rich import print as rprint
 from rich.markdown import Markdown
-from colbert.infra.config import ColBERTConfig
-from colbert.modeling.checkpoint import Checkpoint
-from colbert.indexing.collection_encoder import CollectionEncoder
 
-from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file, generate_output_files
+from neighborhoodwatch.cu_knn import tune_memory, process_batches
+from neighborhoodwatch.generate_dataset import split_into_sentences, ParquetStreamer, is_zero_embedding
+from neighborhoodwatch.merge import merge_indices_and_distances
+from neighborhoodwatch.model_generator import get_effective_embedding_size, EmbeddingModelName, \
+    ColbertPreTrainedEmbeddingGenerator
+from neighborhoodwatch.neighborhoodwatch import KeepLineBreaksFormatter
+from neighborhoodwatch.nw_utils import BASE_CONFIG, BASE_DATASET, check_dataset_exists_remote, get_model_prefix, \
+    setup_model_output_folder, QUERY_DATASET, get_full_filename, get_partial_indices_filename, \
+    get_partial_distances_filename
+from neighborhoodwatch.parquet_to_format import generate_output_files
 
 pa.jemalloc_set_decay_ms(0)
 
 
-class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
-    def __init__(self,
-                 model_name="colbertv2.0",
-                 download_pretrained_model=False,
-                 chunk_size=300000,
-                 normalize_embed=False):
-        super().__init__(model_name, 128, chunk_size, normalize_embed)
-
-        self.local_model_base_dir = f".pretrained"
-        Path(self.local_model_base_dir).mkdir(parents=True, exist_ok=True)
-
-        # Download the pretrained model if necessary
-        self.download_colbert_model(download_pretrained_model)
-
-        # Get Colbert collection encoder
-        self.colbert_cfg = ColBERTConfig(checkpoint=f"{self.local_model_base_dir}/{self.model_name}")
-        self.colbert_cp = Checkpoint(self.colbert_cfg.checkpoint, colbert_config=self.colbert_cfg)
-        self.encoder = CollectionEncoder(self.colbert_cfg, self.colbert_cp)
-
-    def download_colbert_model(self, force_download):
-        local_model_file = f".pretrained/{self.model_name}.tar.gz"
-        try:
-            if not os.path.exists(local_model_file) or force_download is True:
-                print(f"   download Colbert pre-trained model ...")
-                session = requests.Session()
-
-                model_url = "https://downloads.cs.stanford.edu/nlp/data/colbert/colbertv2/colbertv2.0.tar.gz"
-                response = session.get(url=model_url, stream=True)
-                with open(local_model_file, 'wb') as fh:
-                    for chunk in response.iter_content(1024 * 1024 * 1024):
-                        fh.write(chunk)
-
-            tar = tarfile.open(local_model_file)
-            tar.extractall(path=self.local_model_base_dir)
-        except Exception as e:
-            print("   ** failed to download the model", e)
-            raise RuntimeError(e)
-
-    def get_embedding_from_model(self, text):
-        if isinstance(text, str):
-            text = [text]
-
-        embeddings = []
-        tensor_embeddings, token_cnt = self.encoder.encode_passages(text)
-        np_embed = Tensor.numpy(tensor_embeddings)
-        embeddings.append(np_embed.flatten())
-
-        return embeddings, token_cnt
-
-
 def process_source_dataset(streamer,
                            dataset,
-                           model_name,
                            input_dimensions,
                            token_count,
                            embedding_chunk_size,
                            column_to_embed,
-                           normalize,
                            logger=None):
 
     processed_token_embedding_cnt = 0
@@ -108,31 +40,29 @@ def process_source_dataset(streamer,
     total_sentence_cnt = 0
 
     embedding_array = []
-    
-    if model_name == "colbertv2.0":
-        generator = ColbertPreTrainedEmbeddingGenerator(chunk_size=embedding_chunk_size,
-                                                        normalize_embed=normalize)
-    else:
-        assert False, f"Unsupported model name: {model_name}"
+
+    generator = ColbertPreTrainedEmbeddingGenerator(chunk_size=embedding_chunk_size)
 
     # TODO: Batch this  for better perf
     for cur_row, row in enumerate(dataset, start=1):  # Using enumerate to track current row
         sentence_list = split_into_sentences(row[column_to_embed])
 
-        #embedding_tuple_list, zero_embedding_cnt = get_embeddings_from_map([[cur_row, sentence_list]], generator)
-        embeddings, counts = generator.generate_embedding(sentence_list)
+        embeddings = generator.generate_embedding(sentence_list)
 
         embeddings_length = len(embeddings)
-        #embeddings_length = 1
 
         for j in range(embeddings_length):
 
             # split the embeddings into token embeddings
             token_embeddings = [embeddings[j][i * input_dimensions:(i + 1) * input_dimensions] for i in
-                            range(len(embeddings[j]) // input_dimensions)]
+                                range(len(embeddings[j]) // input_dimensions)]
 
             for token_embedding in token_embeddings:
-                processed_token_embedding_cnt+= 1
+                processed_token_embedding_cnt += 1
+                if is_zero_embedding(token_embedding):
+                    detected_zero_text_embedding_cnt += 1
+                    continue
+
                 embedding_array.append(token_embedding)  # Directly extending the list
                 if processed_token_embedding_cnt >= token_count:
                     break  # Early exit if token count is reached
@@ -141,14 +71,13 @@ def process_source_dataset(streamer,
         if processed_token_embedding_cnt >= token_count:
             break  # Early exit if token count is reached
 
-
     if embedding_array:
         if logger is not None:
             logger.info(f"[final] processed_token_embedding_cnt: {processed_token_embedding_cnt}")
         streamer.stream_to_parquet_without_src_metadata(embedding_array)
         embedding_array.clear()
 
-    return (cur_row, total_sentence_cnt, processed_token_embedding_cnt, detected_zero_text_embedding_cnt)
+    return cur_row, total_sentence_cnt, processed_token_embedding_cnt, detected_zero_text_embedding_cnt
 
 
 def process_knn_computation(data_dir,
@@ -156,8 +85,6 @@ def process_knn_computation(data_dir,
                             base_count,
                             query_filename,
                             query_count,
-                            final_indices_filename,
-                            final_distances_filename,
                             mem_tune=False,
                             initial_batch_size=1000000,
                             max_memory_threshold=0.1,
@@ -185,8 +112,6 @@ def process_knn_computation(data_dir,
             len(base_table) % batch_size), f"Cannot generate k of {k} with only {len(base_table)} rows and batch_size of {batch_size}."
 
     process_batches(data_dir,
-                    final_indices_filename,
-                    final_distances_filename,
                     base_table,
                     query_table,
                     batch_count,
@@ -228,8 +153,8 @@ Some example commands:\n
         """, formatter_class=KeepLineBreaksFormatter)
     parser.add_argument('query_token_count', type=int, help="number of query token vectors to generate")
     parser.add_argument('base_token_count', type=int, help="number of base token vectors to generate")
-    parser.add_argument('-m', '--model_name', type=str, default="colbertv2.0",
-                        help='Colbert model name (default: colbertv2.0)')
+    parser.add_argument('-m', '--model_name', type=str, default="colbert-v2.0",
+                        help='Colbert model name (default: colbert-v2.0)')
     parser.add_argument('-k', '--k', type=int, default=100, help='number of neighbors to compute per query vector')
     parser.add_argument('-es', '--embedding-scale', type=str, default="medium",
                         help='Embedding scale. Options: small (10000), medium(100000), large (1000000) (default: medium)')
@@ -270,12 +195,8 @@ Some example commands:\n
         f'`ck` program is reserved for Colbert model...'
 
     model_prefix = get_model_prefix(args.model_name)
-
-    dimensions = get_effective_embedding_size(args.model_name)
-
-    data_dir = f"{args.data_dir}/{model_prefix}/qt{args.query_token_count}_bt{args.base_token_count}_k{args.k}"
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
+    data_dir = setup_model_output_folder(args.data_dir, args.model_name, args.query_token_count, args.base_token_count, args.k)
+    output_dimension = get_effective_embedding_size(args.model_name)
 
     if args.embedding_scale is None or args.embedding_scale == "medium":
         embedding_chunk_size = 100000
@@ -302,14 +223,11 @@ Some example commands:\n
     section_time = time.time()
     src_query_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
 
-    token_embed_columns = [f'token_embedding_{i}' for i in range(dimensions)]
+    token_embed_columns = [f'token_embedding_{i}' for i in range(output_dimension)]
 
-    if not args.norm_embed:
-        query_embed_token_filename = get_full_filename(data_dir,
-                                                       f"{model_prefix}_{dimensions}_query_token{args.query_token_count}_src.parquet")
-    else:
-        query_embed_token_filename = get_full_filename(data_dir,
-                                                       f"{model_prefix}_{dimensions}_query_token{args.query_token_count}_src_normalized.parquet")
+    query_embed_token_filename = get_full_filename(data_dir,
+                                                   f"{model_prefix}_{output_dimension}_query_token{args.query_token_count}_src.parquet")
+
     query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
     query_print_info = True
     if not os.path.exists(query_embed_token_filename):
@@ -317,12 +235,10 @@ Some example commands:\n
          query_detected0cnt) = (
             process_source_dataset(query_embed_streamer,
                                    src_query_dataset,
-                                   args.model_name,
-                                   dimensions,
+                                   output_dimension,
                                    args.query_token_count,
                                    embedding_chunk_size,
                                    "question",
-                                   args.norm_embed,
                                    logger=logger))
     else:
         query_print_info = False
@@ -341,12 +257,8 @@ Some example commands:\n
                                              trust_remote_code=True,
                                              split='train')
 
-    if not args.norm_embed:
-        base_embed_token_filename = get_full_filename(data_dir,
-                                                      f"{model_prefix}_{dimensions}_base_token{args.base_token_count}_src.parquet")
-    else:
-        base_embed_token_filename = get_full_filename(data_dir,
-                                                      f"{model_prefix}_{dimensions}_base_token{args.base_token_count}_src_normalized.parquet")
+    base_embed_token_filename = get_full_filename(data_dir,
+                                                  f"{model_prefix}_{output_dimension}_base_token{args.base_token_count}_src.parquet")
     base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
     base_print_info = True
     if not os.path.exists(base_embed_token_filename):
@@ -354,12 +266,10 @@ Some example commands:\n
          base_detected0cnt) = (
             process_source_dataset(base_embed_streamer,
                                    src_base_dataset,
-                                   args.model_name,
-                                   dimensions,
+                                   output_dimension,
                                    args.base_token_count,
                                    embedding_chunk_size,
                                    "text",
-                                   args.norm_embed,
                                    logger=logger))
     else:
         base_print_info = False
@@ -391,25 +301,12 @@ Some example commands:\n
     rprint(Markdown("---"), '')
     rprint(Markdown("**Computing knn ......** "), '')
 
-    if not args.norm_embed:
-        final_indecies_filename = get_full_filename(data_dir,
-                                                    f"{model_prefix}_{dimensions}_final_indices_query_token{args.query_token_count}_k{args.k}.parquet")
-        final_distances_filename = get_full_filename(data_dir,
-                                                     f"{model_prefix}_{dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}.parquet")
-    else:
-        final_indecies_filename = get_full_filename(data_dir,
-                                                    f"{model_prefix}_{dimensions}_final_indices_query_token{args.query_token_count}_k{args.k}_normalized.parquet")
-        final_distances_filename = get_full_filename(data_dir,
-                                                     f"{model_prefix}_{dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}_normalized.parquet")
-
     section_time = time.time()
     process_knn_computation(data_dir,
                             base_embed_token_filename,
                             args.base_token_count,
                             query_embed_token_filename,
                             args.query_token_count,
-                            final_indecies_filename,
-                            final_distances_filename,
                             mem_tune=args.enable_memory_tuning,
                             k=args.k,
                             engine=args.engine)
@@ -429,13 +326,13 @@ Some example commands:\n
     query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
         generate_output_files(data_dir,
                               model_prefix,
-                              dimensions,
+                              output_dimension,
                               base_embed_token_filename,
                               query_embed_token_filename,
                               args.base_token_count,
                               args.query_token_count,
-                              f"final_indices.parquet",
-                              f"final_distances.parquet",
+                              get_partial_indices_filename(data_dir, -1),
+                              get_partial_distances_filename(data_dir, -1),
                               args.k,
                               args.gen_hdf5,
                               token_embed_columns)

@@ -7,7 +7,8 @@ from neighborhoodwatch.parquet_to_format import generate_output_files, validate_
 from neighborhoodwatch.merge import merge_indices_and_distances
 from neighborhoodwatch.cu_knn import compute_knn
 from neighborhoodwatch.cu_knn_ds import compute_knn_ds
-from neighborhoodwatch.nw_utils import *
+from neighborhoodwatch.nw_utils import check_dataset_exists_remote, BASE_DATASET, BASE_CONFIG, get_model_prefix, \
+    get_partial_indices_filename, get_partial_distances_filename, get_model_data_homedir, setup_model_output_folder
 
 import os
 import sys
@@ -15,13 +16,11 @@ from rich import print as rprint
 from rich.markdown import Markdown
 import time
 
-from tests.conftest import model_name
-
 
 def cleanup_partial_parquet(data_dir):
     for filename in os.listdir(data_dir):
         if filename.startswith("distances") or filename.startswith("indices") or filename.startswith("final"):
-            os.remove(filename)
+            os.remove(f"{data_dir}/{filename}")
 
 
 class KeepLineBreaksFormatter(argparse.RawTextHelpFormatter):
@@ -87,17 +86,17 @@ Some example commands:\n
     assert is_valid_model_name(args.model_name), \
         f"The given model name is invalid; must be one of: {get_valid_model_names_string()}"
 
-    if model_name == EmbeddingModelName.COLBERT_V2.value:
+    if args.model_name == EmbeddingModelName.COLBERT_V2.value:
         raise f'For Colbert model, please use `ck` program by running `poetry run ck ...'
 
     model_prefix = get_model_prefix(args.model_name)
-
-    data_dir = f"{args.data_dir}/{model_prefix}/q{args.query_count}_b{args.base_count}_k{args.k}"
-    partial_data_dir = f"{data_dir}/partial"
-    if not os.path.exists(partial_data_dir):
-        os.makedirs(partial_data_dir)
-
+    data_dir = setup_model_output_folder(args.data_dir, 
+                                         args.model_name, 
+                                         args.query_count, 
+                                         args.base_count, 
+                                         args.k)
     output_dimension = get_effective_embedding_size(args.model_name, args.output_dimension_size)
+
     output_dtype = None
     if args.model_name.startswith('voyage'):
         output_dtype = args.output_dtype
@@ -128,13 +127,12 @@ Some example commands:\n
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    cleanup_partial_parquet(partial_data_dir)
+    cleanup_partial_parquet(f"{data_dir}/partial")
 
     rprint(Markdown("**Computing knn ......** "), '')
     section_time = time.time()
     if args.use_dataset_api:
         compute_knn_ds(data_dir,
-                       args.model_name,
                        output_dimension,
                        query_filename,
                        args.query_count,
@@ -172,8 +170,8 @@ Some example commands:\n
                               query_filename,
                               args.base_count,
                               args.query_count,
-                              f"partial/final_indices.parquet",
-                              f"partial/final_distances.parquet",
+                              get_partial_indices_filename(data_dir, -1),
+                              get_partial_distances_filename(data_dir, -1),
                               args.k,
                               args.gen_hdf5)
     rprint(Markdown(

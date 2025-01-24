@@ -262,12 +262,7 @@ class ParquetStreamer:
 
 
 def generate_query_dataset(data_dir, model_name, row_count, output_dimension=None, output_dtype=None):
-    if output_dtype is not None:
-        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_query_vector_data_{row_count}"
-    else:
-        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_query_vector_data_{row_count}"
-
-    filename = f'{data_dir}/{filename_base}.parquet'
+    filename = get_source_query_dataset_filename(data_dir, model_name, row_count, output_dimension, output_dtype)
     if os.path.exists(filename):
         print(f"file {filename} already exists")
         return filename
@@ -299,12 +294,7 @@ def generate_base_dataset(data_dir,
     processed_count = 0
     skipped_count = 0
 
-    if output_dtype is not None:
-        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_{output_dtype}_base_vector_data_{row_count}"
-    else:
-        filename_base = f"{model_name.replace('/', '_')}_{output_dimension}_base_vector_data_{row_count}"
-
-    filename = f'{data_dir}/{filename_base}.parquet'
+    filename = get_source_base_dataset_filename(data_dir, model_name, row_count, output_dimension, output_dtype)
     if os.path.exists(filename):
         print(f"file {filename} already exists")
         return filename

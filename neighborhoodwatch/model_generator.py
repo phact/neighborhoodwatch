@@ -1,5 +1,8 @@
 import math
 import os
+import tarfile
+from pathlib import Path
+
 import numpy as np
 import requests
 
@@ -11,7 +14,10 @@ from tqdm import tqdm
 from openai import OpenAI
 from sentence_transformers import SentenceTransformer
 from vertexai.preview.language_models import TextEmbeddingModel
-
+from colbert.infra.config import ColBERTConfig
+from colbert.modeling.checkpoint import Checkpoint
+from colbert.indexing.collection_encoder import CollectionEncoder
+from torch import Tensor
 import cohere
 import voyageai
 
@@ -32,7 +38,7 @@ class EmbeddingModelName(Enum):
     VOYAGE_3_LARGE = 'voyage-3-large'
     VOYAGE_3_LITE = 'voyage-3-lite'
     ## Colbert model is a per-token embedding model
-    COLBERT_V2 = 'colbert-v2.0'
+    COLBERT_V2 = 'colbertv2.0'
 
 
 def get_valid_model_name_list():
@@ -106,6 +112,46 @@ def get_effective_embedding_size(model_name: str, output_dimension_size: int = N
         return default_dimension_size
 
 
+def get_embedding_generator_for_model(model_name,
+                                      output_dimension=None,
+                                      dataset_type=None,
+                                      output_dtype=None):
+    assert is_valid_model_name(model_name)
+
+    if model_name == EmbeddingModelName.OPENAI_ADA_002.value:
+        return OpenAIEmbeddingGenerator(model_name=model_name)
+    elif (model_name == EmbeddingModelName.OPENAI_V3_SMALL.value or
+          model_name == EmbeddingModelName.OPENAI_V3_LARGE.value):
+        return OpenAIEmbeddingGenerator(model_name=model_name,
+                                        output_dimension_size=output_dimension)
+    elif (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003.value or
+          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004.value or
+          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005.value):
+        return VertexAIEmbeddingGenerator(model_name=model_name)
+    elif (model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2.value or
+          model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2.value or
+          model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2.value):
+        return IntfloatE5EmbeddingGenerator(model_name=model_name)
+    elif model_name == EmbeddingModelName.COLBERT_V2:
+        return ColbertPreTrainedEmbeddingGenerator()
+    elif model_name == EmbeddingModelName.NVIDIA_NEMO.value:
+        return NvdiaNemoEmbeddingGenerator(model_name=model_name)
+    elif (model_name == EmbeddingModelName.COHERE_ENGLISH_V3.value or
+          model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3.value):
+        return CohereEmbeddingV3Generator(model_name=model_name)
+    elif model_name == EmbeddingModelName.VOYAGE_3_LARGE.value:
+        return VoyageAIEmbeddingGenerator(model_name=model_name,
+                                          input_type=dataset_type,
+                                          output_dtype=output_dtype,
+                                          output_dimension_size=output_dimension)
+    elif model_name == EmbeddingModelName.VOYAGE_3_LITE.value:
+        return VoyageAIEmbeddingGenerator(model_name=model_name,
+                                          input_type=dataset_type,
+                                          output_dtype=output_dtype)
+    else:
+        return None
+
+
 class EmbeddingGenerator(ABC):
     def __init__(self,
                  model_name: str,
@@ -118,7 +164,8 @@ class EmbeddingGenerator(ABC):
 
         # Most models have some restrictions on the size of the batch of the texts to be processed
         #   in one call. E.g. Cohere's limit is 96. Otherwise, it will fail the API call.
-        assert chunk_size is not None and 0 < chunk_size <= 64
+        if model_name != EmbeddingModelName.COLBERT_V2.value:
+            assert chunk_size is not None and 0 < chunk_size <= 64
 
         self.model_dimension = get_default_model_dimension_size(self.model_name)
         self.output_dimension = get_effective_embedding_size(self.model_name, output_dimension)
@@ -341,39 +388,47 @@ class VoyageAIEmbeddingGenerator(EmbeddingGenerator):
         return output
 
 
-def get_embedding_generator_for_model(model_name,
-                                      output_dimension=None,
-                                      dataset_type=None,
-                                      output_dtype=None):
-    assert is_valid_model_name(model_name)
+class ColbertPreTrainedEmbeddingGenerator(EmbeddingGenerator):
+    def __init__(self,
+                 model_name=EmbeddingModelName.COLBERT_V2.value,
+                 download_pretrained_model=False,
+                 chunk_size=300000):
+        super().__init__(model_name, 128, chunk_size)
 
-    if model_name == EmbeddingModelName.OPENAI_ADA_002.value:
-        return OpenAIEmbeddingGenerator(model_name=model_name)
-    elif (model_name == EmbeddingModelName.OPENAI_V3_SMALL.value or
-          model_name == EmbeddingModelName.OPENAI_V3_LARGE.value):
-        return OpenAIEmbeddingGenerator(model_name=model_name,
-                                        output_dimension_size=output_dimension)
-    elif (model_name == EmbeddingModelName.GOOGLE_TEXT_GECKO_003.value or
-          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_004.value or
-          model_name == EmbeddingModelName.GOOGLE_TEXT_EMBEDDING_005.value):
-        return VertexAIEmbeddingGenerator(model_name=model_name)
-    elif (model_name == EmbeddingModelName.INTFLOAT_E5_SMALL_V2.value or
-          model_name == EmbeddingModelName.INTFLOAT_E5_BASE_V2.value or
-          model_name == EmbeddingModelName.INTFLOAT_E5_LARGE_V2.value):
-        return IntfloatE5EmbeddingGenerator(model_name=model_name)
-    elif model_name == EmbeddingModelName.NVIDIA_NEMO.value:
-        return NvdiaNemoEmbeddingGenerator(model_name=model_name)
-    elif (model_name == EmbeddingModelName.COHERE_ENGLISH_V3.value or
-          model_name == EmbeddingModelName.COHERE_ENGLISH_LIGHT_V3.value):
-        return CohereEmbeddingV3Generator(model_name=model_name)
-    elif model_name == EmbeddingModelName.VOYAGE_3_LARGE.value:
-        return VoyageAIEmbeddingGenerator(model_name=model_name,
-                                          input_type=dataset_type,
-                                          output_dtype=output_dtype,
-                                          output_dimension_size=output_dimension)
-    elif model_name == EmbeddingModelName.VOYAGE_3_LITE.value:
-        return VoyageAIEmbeddingGenerator(model_name=model_name,
-                                          input_type=dataset_type,
-                                          output_dtype=output_dtype)
-    else:
-        return None
+        self.local_model_base_dir = f".pretrained"
+        Path(self.local_model_base_dir).mkdir(parents=True, exist_ok=True)
+
+        # Download the pretrained model if necessary
+        self.download_colbert_model(download_pretrained_model)
+
+        # Get Colbert collection encoder
+        self.colbert_cfg = ColBERTConfig(checkpoint=f"{self.local_model_base_dir}/{self.model_name}")
+        self.colbert_cp = Checkpoint(self.colbert_cfg.checkpoint, colbert_config=self.colbert_cfg)
+        self.encoder = CollectionEncoder(self.colbert_cfg, self.colbert_cp)
+
+    def download_colbert_model(self, force_download):
+        local_model_file = f".pretrained/{self.model_name}.tar.gz"
+        try:
+            if not os.path.exists(local_model_file) or force_download is True:
+                print(f"   download Colbert pre-trained model ...")
+                session = requests.Session()
+
+                model_url = "https://downloads.cs.stanford.edu/nlp/data/colbert/colbertv2/colbertv2.0.tar.gz"
+                response = session.get(url=model_url, stream=True)
+                with open(local_model_file, 'wb') as fh:
+                    for chunk in response.iter_content(1024 * 1024 * 1024):
+                        fh.write(chunk)
+
+            tar = tarfile.open(local_model_file)
+            tar.extractall(path=self.local_model_base_dir)
+        except Exception as e:
+            print("   ** failed to download the model", e)
+            raise RuntimeError(e)
+
+    def _call_model_api(self, text, *args, **kwargs):
+        embeddings = []
+        tensor_embeddings, token_cnt = self.encoder.encode_passages(text)
+        np_embed = Tensor.numpy(tensor_embeddings)
+        embeddings.append(np_embed.flatten())
+
+        return embeddings, token_cnt

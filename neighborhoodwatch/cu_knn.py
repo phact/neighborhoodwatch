@@ -23,7 +23,7 @@ from neighborhoodwatch.nw_utils import *
 ## 
 
 
-def stream_cudf_to_parquet(data_dir, filename, df, chunk_size):
+def stream_cudf_to_parquet(filename, df, chunk_size):
     """
     Stream a cuDF DataFrame to a single Parquet file in chunks.
 
@@ -44,7 +44,7 @@ def stream_cudf_to_parquet(data_dir, filename, df, chunk_size):
         table_chunk = cudf.DataFrame.to_arrow(df_chunk)
 
         if writer is None:
-            writer = pq.ParquetWriter(f"{get_full_filename(data_dir,filename)}", table_chunk.schema)
+            writer = pq.ParquetWriter(f"{filename}", table_chunk.schema)
 
         writer.write_table(table_chunk)
 
@@ -280,8 +280,8 @@ def process_batches(data_dir,
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        stream_cudf_to_parquet(f"{data_dir}/partial", f'distances{start}.parquet', distances, 100000)
-        stream_cudf_to_parquet(f"{data_dir}/partial", f'indices{start}.parquet', indices, 100000)
+        stream_cudf_to_parquet(get_partial_distances_filename(data_dir, start), distances, 100000)
+        stream_cudf_to_parquet(get_partial_indices_filename(data_dir, start), indices, 100000)
 
         cleanup(df_numeric, distances, indices, dataset)
 
