@@ -44,14 +44,10 @@ def merge_indices_and_distances(data_dir, k=100):
         distances_table = read_ifvec_parquet_with_proper_schema(get_partial_distances_filename(data_dir, 0))
 
         batch_size = min(10000000, len(indices_table))
-
         batch_count = math.ceil(len(indices_table) / batch_size)
 
-        final_indices_filename = get_partial_indices_filename(data_dir, -1)
-        final_distances_filename = get_partial_distances_filename(data_dir, -1)
-
-        final_indices_writer = pq.ParquetWriter(final_indices_filename, indices_table.schema)
-        final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
+        final_indices_writer = pq.ParquetWriter(get_partial_indices_filename(data_dir, -1), indices_table.schema)
+        final_distances_writer = pq.ParquetWriter(get_partial_distances_filename(data_dir, -1), distances_table.schema)
 
         for start in tqdm(range(0, batch_count)):
             final_indices = pd.DataFrame()

@@ -98,8 +98,8 @@ def get_embeddings_from_map(text_map, generator, dataset_type=None):
     return [(key, [next(iterator) for _ in value_list]) for key, value_list in text_map]
 
 
-def process_dataset(streamer,
-                    dataset_type,
+def process_dataset(dataset_type,
+                    streamer,
                     dataset,
                     row_count,
                     embedding_column,
@@ -269,8 +269,8 @@ def generate_query_dataset(data_dir, model_name, row_count, output_dimension=Non
 
     full_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
     streamer = ParquetStreamer(filename, full_dataset.column_names)
-    processed_count, skipped_count = process_dataset(streamer,
-                                                     'query',
+    processed_count, skipped_count = process_dataset('query',
+                                                     streamer,
                                                      full_dataset,
                                                      row_count,
                                                      "question",
@@ -325,8 +325,8 @@ def generate_base_dataset(data_dir,
         print(f"   no matching base title for query titles {query_titles}")
     else:
         print("-- processing filtered base dataset 1 (title in)")
-        processed_count, skipped_count = process_dataset(streamer,
-                                                         'document',
+        processed_count, skipped_count = process_dataset('document',
+                                                         streamer,
                                                          filtered_dataset,
                                                          row_count,
                                                          "text",
@@ -348,8 +348,8 @@ def generate_base_dataset(data_dir,
 
         print("-- processing filtered base dataset 2 (title not in)")
         # filtered_dataset.map(process_dataset, batched=True, batch_size=10, num_proc=16, fn_kwargs={"streamer": streamer, "row_count": row_count - processed_count, "embedding_column": "text"})
-        p2, d2 = process_dataset(streamer,
-                                 'document',
+        p2, d2 = process_dataset('document',
+                                 streamer,
                                  filtered_dataset,
                                  row_count - processed_count,
                                  "text",

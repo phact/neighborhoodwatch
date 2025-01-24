@@ -229,8 +229,8 @@ def process_dataset_batches(data_dir,
         assert (len(distances) == query_count)
         assert (len(indices) == query_count)
 
-        stream_cudf_to_parquet(get_partial_distances_filename(data_dir, i), distances, 100000)
-        stream_cudf_to_parquet(get_partial_indices_filename(data_dir, i), indices, 100000)
+        stream_cudf_to_parquet(get_partial_distances_filename(data_dir, -1), distances, 100000)
+        stream_cudf_to_parquet(get_partial_indices_filename(data_dir, -1), indices, 100000)
 
         cleanup(base_ds, base_df_numeric, query_ds, query_df_numeric, 
                 distances, indices, distances_q, indices_q, 
