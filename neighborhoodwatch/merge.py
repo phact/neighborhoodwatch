@@ -37,19 +37,19 @@ def read_ifvec_parquet_with_proper_schema(filename):
     return ifvec_table
 
 
-def merge_indices_and_distances(data_dir):
-    file_count = get_file_count(data_dir)
+def merge_indices_and_distances(data_dir, k=100):
+    file_count = get_file_count(f"{data_dir}/partial")
 
     if file_count > 0:
-        indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/indices0.parquet")
-        distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/distances0.parquet")
+        indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/partial/indices0.parquet")
+        distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/partial/distances0.parquet")
 
         batch_size = min(10000000, len(indices_table))
 
         batch_count = math.ceil(len(indices_table) / batch_size)
 
-        final_indices_filename = f'{data_dir}/final_indices.parquet'
-        final_distances_filename = f'{data_dir}/final_distances.parquet'
+        final_indices_filename = f'{data_dir}/partial/final_indices.parquet'
+        final_distances_filename = f'{data_dir}/partial/final_distances.parquet'
 
         final_indices_writer = pq.ParquetWriter(final_indices_filename, indices_table.schema)
         final_distances_writer = pq.ParquetWriter(final_distances_filename, distances_table.schema)
@@ -59,8 +59,8 @@ def merge_indices_and_distances(data_dir):
             final_distances = pd.DataFrame()
 
             for i in tqdm(range(file_count)):
-                indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/indices{i}.parquet")
-                distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/distances{i}.parquet")
+                indices_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/partial/indices{i}.parquet")
+                distances_table = read_ifvec_parquet_with_proper_schema(f"{data_dir}/partial/distances{i}.parquet")
 
                 if start != batch_count:
                     indices_batch = indices_table.slice(start, batch_size).to_pandas()

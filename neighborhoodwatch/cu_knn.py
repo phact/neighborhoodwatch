@@ -280,8 +280,8 @@ def process_batches(data_dir,
         assert (len(distances) == len(query_table))
         assert (len(indices) == len(query_table))
 
-        stream_cudf_to_parquet(data_dir, f'distances{start}.parquet', distances, 100000)
-        stream_cudf_to_parquet(data_dir, f'indices{start}.parquet', indices, 100000)
+        stream_cudf_to_parquet(f"{data_dir}/partial", f'distances{start}.parquet', distances, 100000)
+        stream_cudf_to_parquet(f"{data_dir}/partial", f'indices{start}.parquet', indices, 100000)
 
         cleanup(df_numeric, distances, indices, dataset)
 

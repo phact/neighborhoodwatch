@@ -29,7 +29,7 @@ from neighborhoodwatch.cu_knn import tune_memory, process_batches
 from neighborhoodwatch.generate_dataset import EmbeddingGenerator, split_into_sentences, get_embeddings_from_map, \
      ParquetStreamer
 from neighborhoodwatch.merge import merge_indices_and_distances
-from neighborhoodwatch.model_generator import get_effective_embedding_size
+from neighborhoodwatch.model_generator import get_effective_embedding_size, EmbeddingModelName
 from neighborhoodwatch.neighborhoodwatch import KeepLineBreaksFormatter
 from neighborhoodwatch.nw_utils import *
 from rich import print as rprint
@@ -38,7 +38,7 @@ from colbert.infra.config import ColBERTConfig
 from colbert.modeling.checkpoint import Checkpoint
 from colbert.indexing.collection_encoder import CollectionEncoder
 
-from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file
+from neighborhoodwatch.parquet_to_format import generate_ivec_fvec_files, generate_hdf5_file, generate_output_files
 
 pa.jemalloc_set_decay_ms(0)
 
@@ -235,8 +235,6 @@ Some example commands:\n
                         help='Embedding scale. Options: small (10000), medium(100000), large (1000000) (default: medium)')
     parser.add_argument('--data-dir', type=str, default='knn_dataset',
                         help='Directory to store the generated data (default: knn_dataset)')
-    parser.add_argument('--norm-embed', action=argparse.BooleanOptionalAction, default=False,
-                        help='Normalize the returned model embeddings (default: False)')
     parser.add_argument('--use-dataset-api', action=argparse.BooleanOptionalAction, default=False,
                         help='Use \'pyarrow.dataset\' API to read the dataset (default: True). Recommended for large datasets.')
     parser.add_argument('--gen-hdf5', action=argparse.BooleanOptionalAction, default=True,
@@ -261,7 +259,6 @@ Some example commands:\n
 * model name: `{args.model_name}`\n
 * K: `{args.k}`\n
 * embedding scale: `{args.embedding_scale}`\n
-* normalize embeddings: `{args.norm_embed}`\n
 --- behavior specification ---\n
 * use dataset API: `{args.use_dataset_api}`\n
 * generated hdf5 file: `{args.gen_hdf5}`\n
@@ -269,7 +266,13 @@ Some example commands:\n
 * engine: `{args.engine}`
 """))
 
+    assert args.model_name == EmbeddingModelName.COLBERT_V2.value, \
+        f'`ck` program is reserved for Colbert model...'
+
     model_prefix = get_model_prefix(args.model_name)
+
+    dimensions = get_effective_embedding_size(args.model_name)
+
     data_dir = f"{args.data_dir}/{model_prefix}/qt{args.query_token_count}_bt{args.base_token_count}_k{args.k}"
     if not os.path.exists(data_dir):
         os.makedirs(data_dir)
@@ -294,21 +297,19 @@ Some example commands:\n
     )
     logger = logging.getLogger(__name__)
 
-    input_dimensions = get_effective_embedding_size(args.model_name)
-
     rprint('', Markdown("---"))
     rprint(Markdown("**Generating query dataset with embeddings ......** "), '')
     section_time = time.time()
     src_query_dataset = datasets.load_dataset(QUERY_DATASET, cache_dir=".cache", trust_remote_code=True)["train"]
 
-    token_embed_columns = [f'token_embedding_{i}' for i in range(input_dimensions)]
+    token_embed_columns = [f'token_embedding_{i}' for i in range(dimensions)]
 
     if not args.norm_embed:
         query_embed_token_filename = get_full_filename(data_dir,
-                                                       f"{model_prefix}_{input_dimensions}_query_token{args.query_token_count}_src.parquet")
+                                                       f"{model_prefix}_{dimensions}_query_token{args.query_token_count}_src.parquet")
     else:
         query_embed_token_filename = get_full_filename(data_dir,
-                                                       f"{model_prefix}_{input_dimensions}_query_token{args.query_token_count}_src_normalized.parquet")
+                                                       f"{model_prefix}_{dimensions}_query_token{args.query_token_count}_src_normalized.parquet")
     query_embed_streamer = ParquetStreamer(query_embed_token_filename, token_embed_columns)
     query_print_info = True
     if not os.path.exists(query_embed_token_filename):
@@ -317,7 +318,7 @@ Some example commands:\n
             process_source_dataset(query_embed_streamer,
                                    src_query_dataset,
                                    args.model_name,
-                                   input_dimensions,
+                                   dimensions,
                                    args.query_token_count,
                                    embedding_chunk_size,
                                    "question",
@@ -342,10 +343,10 @@ Some example commands:\n
 
     if not args.norm_embed:
         base_embed_token_filename = get_full_filename(data_dir,
-                                                      f"{model_prefix}_{input_dimensions}_base_token{args.base_token_count}_src.parquet")
+                                                      f"{model_prefix}_{dimensions}_base_token{args.base_token_count}_src.parquet")
     else:
         base_embed_token_filename = get_full_filename(data_dir,
-                                                      f"{model_prefix}_{input_dimensions}_base_token{args.base_token_count}_src_normalized.parquet")
+                                                      f"{model_prefix}_{dimensions}_base_token{args.base_token_count}_src_normalized.parquet")
     base_embed_streamer = ParquetStreamer(base_embed_token_filename, token_embed_columns)
     base_print_info = True
     if not os.path.exists(base_embed_token_filename):
@@ -354,7 +355,7 @@ Some example commands:\n
             process_source_dataset(base_embed_streamer,
                                    src_base_dataset,
                                    args.model_name,
-                                   input_dimensions,
+                                   dimensions,
                                    args.base_token_count,
                                    embedding_chunk_size,
                                    "text",
@@ -392,14 +393,14 @@ Some example commands:\n
 
     if not args.norm_embed:
         final_indecies_filename = get_full_filename(data_dir,
-                                                    f"{model_prefix}_{input_dimensions}_final_indices_query_token{args.query_token_count}_k{args.k}.parquet")
+                                                    f"{model_prefix}_{dimensions}_final_indices_query_token{args.query_token_count}_k{args.k}.parquet")
         final_distances_filename = get_full_filename(data_dir,
-                                                     f"{model_prefix}_{input_dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}.parquet")
+                                                     f"{model_prefix}_{dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}.parquet")
     else:
         final_indecies_filename = get_full_filename(data_dir,
-                                                    f"{model_prefix}_{input_dimensions}_final_indices_query_token{args.query_token_count}_k{args.k}_normalized.parquet")
+                                                    f"{model_prefix}_{dimensions}_final_indices_query_token{args.query_token_count}_k{args.k}_normalized.parquet")
         final_distances_filename = get_full_filename(data_dir,
-                                                     f"{model_prefix}_{input_dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}_normalized.parquet")
+                                                     f"{model_prefix}_{dimensions}_final_distances_query_token{args.query_token_count}_k{args.k}_normalized.parquet")
 
     section_time = time.time()
     process_knn_computation(data_dir,
@@ -418,7 +419,7 @@ Some example commands:\n
     rprint(Markdown("---"), '')
     rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
-    merge_indices_and_distances(data_dir)
+    merge_indices_and_distances(data_dir, k=args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
 
@@ -426,39 +427,20 @@ Some example commands:\n
     rprint(Markdown("**Generating ivec's and fvec's ......** "), '')
     section_time = time.time()
     query_vector_fvec, query_df_hdf5, base_vector_fvec, base_df_hdf5, indices_ivec, distances_fvec = \
-        generate_ivec_fvec_files(data_dir,
-                                 args.model_name,
-                                 input_dimensions,
-                                 base_embed_token_filename,
-                                 query_embed_token_filename,
-                                 final_indecies_filename,
-                                 final_distances_filename,
-                                 args.base_token_count,
-                                 args.query_token_count,
-                                 args.k,
-                                 args.norm_embed,
-                                 token_embed_columns)
+        generate_output_files(data_dir,
+                              model_prefix,
+                              dimensions,
+                              base_embed_token_filename,
+                              query_embed_token_filename,
+                              args.base_token_count,
+                              args.query_token_count,
+                              f"final_indices.parquet",
+                              f"final_distances.parquet",
+                              args.k,
+                              args.gen_hdf5,
+                              token_embed_columns)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
-
-    rprint(Markdown("---"), '')
-    if args.gen_hdf5:
-        rprint(Markdown("**Generating hdf5 ......** "), '')
-        section_time = time.time()
-        generate_hdf5_file(data_dir,
-                           model_prefix,
-                           input_dimensions,
-                           base_df_hdf5,
-                           query_df_hdf5,
-                           final_indecies_filename,
-                           final_distances_filename,
-                           args.base_token_count,
-                           args.query_token_count,
-                           args.k,
-                           args.norm_embed)
-        rprint(Markdown(
-            f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
-
 
 if __name__ == "__main__": 
     main()

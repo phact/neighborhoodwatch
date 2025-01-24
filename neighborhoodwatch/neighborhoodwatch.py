@@ -3,7 +3,7 @@ import argparse
 from neighborhoodwatch.generate_dataset import generate_query_dataset, generate_base_dataset
 from neighborhoodwatch.model_generator import get_valid_model_names_string, get_effective_embedding_size, \
     is_valid_model_name, EmbeddingModelName
-from neighborhoodwatch.parquet_to_format import generate_output_files, validate_files
+from neighborhoodwatch.parquet_to_format import generate_output_files, validate_files_v0, validate_files
 from neighborhoodwatch.merge import merge_indices_and_distances
 from neighborhoodwatch.cu_knn import compute_knn
 from neighborhoodwatch.cu_knn_ds import compute_knn_ds
@@ -18,8 +18,8 @@ import time
 from tests.conftest import model_name
 
 
-def cleanup_partial_parquet():
-    for filename in os.listdir():
+def cleanup_partial_parquet(data_dir):
+    for filename in os.listdir(data_dir):
         if filename.startswith("distances") or filename.startswith("indices") or filename.startswith("final"):
             os.remove(filename)
 
@@ -87,11 +87,15 @@ Some example commands:\n
     assert is_valid_model_name(args.model_name), \
         f"The given model name is invalid; must be one of: {get_valid_model_names_string()}"
 
+    if model_name == EmbeddingModelName.COLBERT_V2.value:
+        raise f'For Colbert model, please use `ck` program by running `poetry run ck ...'
+
     model_prefix = get_model_prefix(args.model_name)
 
     data_dir = f"{args.data_dir}/{model_prefix}/q{args.query_count}_b{args.base_count}_k{args.k}"
-    if not os.path.exists(data_dir):
-        os.makedirs(data_dir)
+    partial_data_dir = f"{data_dir}/partial"
+    if not os.path.exists(partial_data_dir):
+        os.makedirs(partial_data_dir)
 
     output_dimension = get_effective_embedding_size(args.model_name, args.output_dimension_size)
     output_dtype = None
@@ -124,7 +128,7 @@ Some example commands:\n
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
 
-    cleanup_partial_parquet()
+    cleanup_partial_parquet(partial_data_dir)
 
     rprint(Markdown("**Computing knn ......** "), '')
     section_time = time.time()
@@ -153,7 +157,7 @@ Some example commands:\n
 
     rprint(Markdown("**Merging indices and distances ......** "), '')
     section_time = time.time()
-    merge_indices_and_distances(data_dir)
+    merge_indices_and_distances(data_dir, k=args.k)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
@@ -168,8 +172,8 @@ Some example commands:\n
                               query_filename,
                               args.base_count,
                               args.query_count,
-                              f"final_indices.parquet",
-                              f"final_distances.parquet",
+                              f"partial/final_indices.parquet",
+                              f"partial/final_distances.parquet",
                               args.k,
                               args.gen_hdf5)
     rprint(Markdown(
@@ -183,21 +187,15 @@ Some example commands:\n
             rprint(Markdown("**Validating ivec's and fvec's ......** "), '')
             section_time = time.time()
 
-            if model_name != EmbeddingModelName.COLBERT_V2.value:
-                validate_files(data_dir,
-                               query_vector_fvec,
-                               base_vector_fvec,
-                               indices_ivec,
-                               distances_fvec)
-            else:
-                validate_files_colbert(data_dir,
-                                       query_vector_fvec,
-                                       base_vector_fvec,
-                                       indices_ivec,
-                                       distances_fvec)
+            validate_files_v0(data_dir,
+                              query_vector_fvec,
+                              base_vector_fvec,
+                              indices_ivec,
+                              distances_fvec)
+
             rprint(Markdown(
                 f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
-            rprint(Markdown("---"), '')
+        rprint(Markdown("---"), '')
 
 
 if __name__ == "__main__":

@@ -115,7 +115,7 @@ def generate_query_vectors_fvec(data_dir,
                                 hdf5_file=None):
     df = read_and_extract(data_dir, input_parquet, query_count, dimensions)
 
-    if not is_empty_file(query_vectors_fvec_file):
+    if is_empty_file(query_vectors_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, query_vectors_fvec_file, df, 'f', dimensions)
     else:
         print(f"File {query_vectors_fvec_file} already exists")
@@ -135,7 +135,7 @@ def generate_base_vectors_fvec(data_dir,
                                hdf5_file=None):
     df = read_and_extract(data_dir, input_parquet, base_count, dimensions, column_names)
 
-    if not is_empty_file(base_vectors_fvec_file):
+    if is_empty_file(base_vectors_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, base_vectors_fvec_file, df, 'f', dimensions)
     else:
         print(f"File {base_vectors_fvec_file} already exists")
@@ -153,7 +153,7 @@ def generate_distances_fvec(data_dir,
                             hdf5_file=None):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
 
-    if not is_empty_file(distances_fvec_file):
+    if is_empty_file(distances_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, distances_fvec_file, df, 'f', k)
     else:
         print(f"File {distances_fvec_file} already exists")
@@ -171,7 +171,7 @@ def generate_indices_ivec(data_dir,
                           hdf5_file=None):
     df = read_parquet_to_dataframe(data_dir, input_parquet)
 
-    if not is_empty_file(indices_fvec_file):
+    if is_empty_file(indices_fvec_file):
         write_ivec_fvec_from_dataframe(data_dir, indices_fvec_file, df, 'i', k)
     else:
         print(f"File {indices_fvec_file} already exists")
@@ -270,11 +270,11 @@ def write_hdf5(data_dir, df, filename, group):
             f.create_dataset(group, data=data)
 
 
-def validate_files(data_dir,
-                   query_vector_fvec,
-                   base_vector_fvec,
-                   indices_ivec,
-                   distances_fvec):
+def validate_files_v0(data_dir,
+                      query_vector_fvec,
+                      base_vector_fvec,
+                      indices_ivec,
+                      distances_fvec):
     zero_query_vector_count = 0
     total_query_vector_count = count_vectors(data_dir, query_vector_fvec)
     total_mismatch_count = 0
@@ -297,8 +297,8 @@ def validate_files(data_dir,
             if not np.isclose((1 - similarity), distance / 2):
                 total_mismatch_count += 1
                 print(
-                    f"Expected 1 - similarity {1 - similarity} to equal distance {distance} for query vector {n} and base vector {index}")
-                print(f"Difference {1 - similarity - distance / 2}")
+                    f"Expected '1 - similarity' ({1 - similarity}) equal to distance ({distance}) for query vector {n} and base vector {index}")
+                print(f"distance vs similarity diff: {distance - (1 - similarity)}")
                 # print(base_vector)
                 # print(nth_query_vector)
             col += 1
@@ -306,13 +306,13 @@ def validate_files(data_dir,
     print(f"Total mismatch count: {total_mismatch_count}")
 
 
-def validate_files_colbert(data_dir,
-                           query_vector_fvec,
-                           base_vector_fvec,
-                           indices_ivec,
-                           distances_fvec,
-                           columns=None,
-                           input_parquet=None):
+def validate_files(data_dir,
+                   query_vector_fvec,
+                   base_vector_fvec,
+                   indices_ivec,
+                   distances_fvec,
+                   columns=None,
+                   input_parquet=None):
     zero_query_vector_count = 0
     total_query_vector_count = count_vectors(data_dir, query_vector_fvec)
     total_mismatch_count = 0
@@ -380,14 +380,14 @@ def validate_files_colbert(data_dir,
                     f"torch {1 - distances_tensor.item()} full {full_brute_force_distance} brute {brute_force_distance} distance {distance} similarity {1 - similarity}")
                 # print(f"torch {1-distances_tensor.item()} brute {brute_force_distance} distance {distance} similarity {1-similarity}")
                 print(
-                    f"Expected 1 - similarity: {1 - similarity} to equal distance: {distance} for query vector {n} and base vector {index}")
+                    f"Expected '1 - similarity' ({1 - similarity}) equal to distance ({distance}) for query vector {n} and base vector {index}")
                 print(f"distance vs similarity diff: {distance - (1 - similarity)}")
                 print(f"cuvs vs similarity diff: {output - (1 - similarity)}")
                 print(f"brute vs similarity diff: {brute_force_distance - (1 - similarity)}")
                 print(f"full brute vs similarity diff: {full_brute_force_distance - (1 - similarity)}")
                 print(f"torch vs similarity diff: {distances_tensor.item() - similarity}")
-                print(base_vector)
-                print(nth_query_vector)
+                # print(base_vector)
+                # print(nth_query_vector)
             col += 1
 
     print(f"Total mismatch count: {total_mismatch_count}")
