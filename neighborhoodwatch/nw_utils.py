@@ -155,7 +155,6 @@ def get_hdf5_filename(knn_model_data_homedir,
 
 
 def output_dimension_validity_check(model_name: str, given_dimension: int, actual_dimension: int):
-    print(f"====>model_name:{model_name}; given_dimenssion:{given_dimension}; actual_dimension:{actual_dimension}")
     pass_check = actual_dimension == given_dimension
     # for Voyage_v3_large model, when the `output_dtype` is binary or ubinary, the
     # actual output dimension is 1/8 of the given dimension
