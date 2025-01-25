@@ -129,12 +129,12 @@ def get_embedding_count(table):
     return len(matching_columns)
 
 
-def prep_table(data_dir, filename, count, dimension):
+def prep_table(data_dir, model_name, filename, count, dimension):
     table = load_table(data_dir, filename, 0, count)
     total_dimensions = sum('embedding_' in c for c in table.column_names)
 
-    assert total_dimensions == dimension, \
-        f"The target dimension {dimension} does not match the actual dimension {total_dimensions} in the table."
+    assert output_dimension_validity_check(model_name, dimension, total_dimensions), \
+        f"Expected {dimension} values, got {total_dimensions} for model {model_name} [filename: {filename}]"
 
     # Not sure if we really need to keep these 2 columns here
     # in the "process_batches" function, we only select the float columns as per the following code:
@@ -149,6 +149,7 @@ def prep_table(data_dir, filename, count, dimension):
 
 
 def compute_knn(data_dir,
+                model_name,
                 dimensions,
                 query_filename,
                 query_count,
@@ -165,9 +166,9 @@ def compute_knn(data_dir,
     # batch_size = 543680
 
     print(f"-- prepare query source table for brute-force KNN computation.")
-    query_table = prep_table(data_dir, query_filename, query_count, dimensions)
+    query_table = prep_table(data_dir, model_name, query_filename, query_count, dimensions)
     print(f"-- prepare base source table for brute-force KNN computation.")
-    base_table = prep_table(data_dir, base_filename, base_count, dimensions)
+    base_table = prep_table(data_dir, model_name, base_filename, base_count, dimensions)
 
     if mem_tune:
         batch_size = tune_memory(base_table, batch_size, max_memory_threshold, rmm)

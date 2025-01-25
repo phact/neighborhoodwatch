@@ -2,7 +2,7 @@ import os
 import numpy as np
 import pytest
 
-from neighborhoodwatch.model_generator import get_effective_embedding_size
+from neighborhoodwatch.model_generator import get_effective_input_dimension_size
 from neighborhoodwatch.nw_utils import setup_model_output_folder, get_source_query_dataset_filename, \
     get_source_base_dataset_filename
 
@@ -38,7 +38,7 @@ else:
     test_model_name = 'intfloat/e5-base-v2'
 
 test_model_prefix = test_model_name.replace("/", "_")
-test_dimensions = get_effective_embedding_size(model_name=test_model_name, output_dimension_size=output_dimension)
+test_dimensions = get_effective_input_dimension_size(model_name=test_model_name, target_dimension_size=output_dimension)
 test_model_output_dir = setup_model_output_folder(test_dataset_dir, model_name, query_count, base_count, k)
 
 test_query_vector_filename = get_source_query_dataset_filename(model_output_dir,

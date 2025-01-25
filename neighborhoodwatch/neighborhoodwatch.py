@@ -142,6 +142,7 @@ Some example commands:\n
                        args.k)
     else:
         compute_knn(data_dir,
+                    args.model_name,
                     output_dimension,
                     query_filename,
                     args.query_count,
@@ -173,7 +174,9 @@ Some example commands:\n
                               get_partial_indices_filename(data_dir, -1),
                               get_partial_distances_filename(data_dir, -1),
                               args.k,
-                              args.gen_hdf5)
+                              args.gen_hdf5,
+                              column_names=None,
+                              output_dtype=output_dtype)
     rprint(Markdown(
         f"(**Duration**: `{time.time() - section_time:.2f} seconds out of {time.time() - start_time:.2f} seconds`)"))
     rprint(Markdown("---"), '')
