@@ -2,10 +2,14 @@ import os
 import numpy as np
 import pytest
 
+from neighborhoodwatch.model_generator import get_effective_input_dimension_size
+from neighborhoodwatch.nw_utils import setup_model_output_folder, get_source_query_dataset_filename, \
+    get_source_base_dataset_filename
+
 ##
 # Target dataset directory for testing purpose
 # NOTE: DO NOT MAKE it the same as the production dataset directory
-##   
+##
 test_dataset_dir = 'knn_dataset_test'
 if not os.path.exists(test_dataset_dir):
     os.makedirs(test_dataset_dir)
@@ -13,46 +17,38 @@ if not os.path.exists(test_dataset_dir):
 ##
 # Tunable parameters for testing purpose
 # Adjust based on your needs
-## 
-query_count = 100
-base_count = 1000
-k = 3
+##
+test_query_count = 100
+test_base_count = 1000
+test_k = 10
+test_output_dimension = None
+test_output_dtype = None
 
 ##
-# TODO: Improve the model testing logic to support
-#       multiple models at the same time
-##
-# This requires OpenAI API key
+#  TBD: add more test cases with 1 for each model
 test_openai = False
-openai_model_name = 'text-embedding-3-large'
-openai_dimensions = 1536
-
-# This requiers GCP access token
 test_gcp_gecko = False
-gecko_model_name = 'textembedding-gecko'
-geco_dimensions = 768
-
 test_huggingface = True
-hf_e5s_model_name = 'intfloat/e5-base-v2'
-hf_e5s_dimensions = 768
 
 if test_openai:
-    model_name = openai_model_name
-    dimensions = openai_dimensions
+    test_model_name = 'text-embedding-3-large'
 elif test_gcp_gecko:
-    model_name = gecko_model_name
-    dimensions = geco_dimensions
-elif test_huggingface:
-    model_name = hf_e5s_model_name
-    dimensions = hf_e5s_dimensions
+    test_model_name = 'intfloat/e5-base-v2'
+else:
+    test_model_name = 'intfloat/e5-base-v2'
 
+test_model_prefix = test_model_name.replace("/", "_")
+test_dimensions = get_effective_input_dimension_size(model_name=test_model_name, target_dimension_size=output_dimension)
+test_model_output_dir = setup_model_output_folder(test_dataset_dir, model_name, query_count, base_count, k)
 
-model_prefix = model_name.replace("/", "_")
+test_query_vector_filename = get_source_query_dataset_filename(model_output_dir,
+                                                                 model_name,
+                                                                 query_count,
+                                                                 output_dimension,
+                                                                 output_dtype)
 
-
-def get_final_indices_filename(model_name, dimensions):
-    return f'{test_dataset_dir}/{model_name}_{dimensions}_final_indices.parquet'
-
-
-def get_final_distances_filename(model_name, dimensions):
-    return f'{test_dataset_dir}/{model_name}_{dimensions}_final_distances.parquet'
+test_base_vector_filename = get_source_base_dataset_filename(model_output_dir,
+                                                               model_name,
+                                                               base_count,
+                                                               output_dimension,
+                                                               output_dtype)

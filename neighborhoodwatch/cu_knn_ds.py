@@ -15,6 +15,7 @@ import rmm
 from rich import print as rprint
 from rich.markdown import Markdown
 
+from neighborhoodwatch.cu_knn import stream_cudf_to_parquet, cleanup
 from neighborhoodwatch.nw_utils import *
 
 
@@ -23,34 +24,6 @@ from neighborhoodwatch.nw_utils import *
 # pyarrow.Dataset API
 #
 ## 
-
-
-def stream_cudf_to_parquet(df, chunk_size, filename):
-    """
-    Stream a cuDF DataFrame to a single Parquet file in chunks.
-
-    Parameters:
-    - df: cuDF DataFrame
-    - chunk_size: Number of rows for each chunk
-    - filename: Output Parquet file name
-    """
-    writer = None
-
-    num_chunks = (len(df) + chunk_size - 1) // chunk_size
-
-    for i in range(num_chunks):
-        start_idx = i * chunk_size
-        end_idx = start_idx + chunk_size
-        df_chunk = df.iloc[start_idx:end_idx]
-
-        table_chunk = cudf.DataFrame.to_arrow(df_chunk)
-
-        if writer is None:
-            writer = pq.ParquetWriter(filename, table_chunk.schema)
-
-        writer.write_table(table_chunk)
-
-    writer.close()
 
 
 # GPU memory per card
@@ -142,12 +115,6 @@ def slice_dataset(dataset, start, end):
     return ds.dataset(dataset.take(indices))
 
 
-def get_embedding_count(table):
-    column_names = table.schema.names
-    matching_columns = [name for name in column_names if name.startswith('embedding_')]
-    return len(matching_columns)
-
-
 def dataset_count(dataset):
     return dataset.scanner(batch_size=100000).count_rows()
 
@@ -172,8 +139,6 @@ def compute_knn_ds(data_dir,
                    query_count,
                    base_filename,
                    base_count,
-                   final_indecies_filename,
-                   final_distances_filename,
                    mem_tune=False,
                    k=100,
                    initial_batch_size=200000,
@@ -202,9 +167,8 @@ def compute_knn_ds(data_dir,
     # batch_count = math.ceil(len(base_dataset) / batch_size)
     assert (base_count % batch_size == 0) or k <= (base_count % batch_size), f"Cannot generate k of {k} with only {base_count} rows and batch_size of {batch_size}."
     
-    process_dataset_batches(final_indecies_filename,
-                            final_distances_filename,
-                            base_dataset, 
+    process_dataset_batches(data_dir,
+                            base_dataset,
                             base_column_names,
                             query_dataset,
                             query_column_names, 
@@ -214,19 +178,8 @@ def compute_knn_ds(data_dir,
                             split)
 
 
-def cleanup(*args):
-    for arg in args:
-        try:
-            del arg
-        except:
-            pass
-    gc.collect()
-    rmm.reinitialize(pool_allocator=False)
-
-
-def process_dataset_batches(final_indecies_filename,
-                            final_distances_filename,
-                            base_dataset, 
+def process_dataset_batches(data_dir,
+                            base_dataset,
                             base_column_names,
                             query_dataset, 
                             query_column_names,
@@ -275,9 +228,9 @@ def process_dataset_batches(final_indecies_filename,
 
         assert (len(distances) == query_count)
         assert (len(indices) == query_count)
- 
-        stream_cudf_to_parquet(distances, 100000, final_distances_filename)
-        stream_cudf_to_parquet(indices, 100000, final_indecies_filename)
+
+        stream_cudf_to_parquet(get_partial_distances_filename(data_dir, -1), distances, 100000)
+        stream_cudf_to_parquet(get_partial_indices_filename(data_dir, -1), indices, 100000)
 
         cleanup(base_ds, base_df_numeric, query_ds, query_df_numeric, 
                 distances, indices, distances_q, indices_q, 
